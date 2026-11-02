@@ -11,7 +11,8 @@ import { useHotkeys } from "@/hooks/use-hotkeys";
 import { useSettings, useStats } from "@/hooks/use-store";
 import { formatCount, ROUNDING_LABELS } from "@/lib/blackjack/counting";
 import { DEVIATION_CELLS, type DeviationAction } from "@/lib/blackjack/deviations/definitions";
-import { actionWord, cellUnavailableReason, describeIndex, entryFor, formatTc, indexMethod, resolveIndexSet } from "@/lib/blackjack/deviations/registry";
+import { actionWord, cellUnavailableReason, cellValidation, formatTc, indexDescription, indexMethod, resolveIndexSet } from "@/lib/blackjack/deviations/registry";
+import { VALIDATION } from "@/lib/blackjack/deviations/validation";
 import { defaultRng } from "@/lib/blackjack/rng";
 import { describeRules } from "@/lib/blackjack/rules";
 import { filterCells, generateDeviationScenario, gradeDeviationAnswer, type DeviationFilter, type DeviationScenario } from "@/lib/training/deviation-trainer";
@@ -112,7 +113,7 @@ export function DeviationTrainer() {
   }
 
   const set = resolution.set;
-  const usable = DEVIATION_CELLS.filter((c) => !cellUnavailableReason(set, c, rules));
+  const usable = DEVIATION_CELLS.filter((c) => !cellUnavailableReason(set, c, rules, rounding));
   const e = scenario?.evaluation;
 
   return (
@@ -277,18 +278,32 @@ export function IndexTable({ resolutionId }: { resolutionId: string }) {
       <p className="text-[11px] text-muted-foreground">{resolutionId}</p>
       <ul className="divide-y divide-border text-xs">
         {DEVIATION_CELLS.map((c) => {
-          const reason = cellUnavailableReason(r.set, c, rules);
+          const reason = cellUnavailableReason(r.set, c, rules, rounding);
+          const status = cellValidation(r.set, c.id, rounding).status;
           const t = stats.dev.byCell[c.id];
           return (
             <li key={c.id} className="flex items-start justify-between gap-2 py-1.5">
               <span className="w-16 shrink-0 font-medium">{c.label}</span>
-              <span className={cn("flex-1", reason && "text-muted-foreground/70")}>{reason ? `Not used: ${reason}` : describeIndex(entryFor(r.set, c.id)!, rounding)}</span>
+              <span className={cn("flex-1", reason && "text-muted-foreground/70")}>
+                <span
+                  className={cn(
+                    "mr-1 rounded px-1 text-[10px] font-semibold uppercase",
+                    reason ? "bg-muted text-muted-foreground" : "bg-success/20 text-success",
+                  )}
+                >
+                  {reason ? (status === "validated" ? "n/a" : status) : "validated"}
+                </span>
+                {reason ? reason : indexDescription(r.set, c.id, rounding)}
+                {reason && status === "experimental" && <span className="block">{indexDescription(r.set, c.id, rounding)}</span>}
+              </span>
               <span className="tabular shrink-0 text-muted-foreground">{t ? pct(accuracy(t)) : ""}</span>
             </li>
           );
         })}
       </ul>
-      <p className="text-[11px] leading-relaxed text-muted-foreground">{indexMethod()}</p>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        Only validated indices are practised and graded. Validation: {VALIDATION.method || "not yet run."} Synthetic estimates: {indexMethod()}
+      </p>
     </div>
   );
 }

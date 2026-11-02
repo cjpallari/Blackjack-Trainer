@@ -14,6 +14,7 @@ import { buildCards } from "../blackjack/shoe";
 import { isTopValue, type DeviationAction, type DeviationCell } from "../blackjack/deviations/definitions";
 import {
   basicActionFor,
+  cellValidation,
   entryFor,
   evaluateDeviation,
   integerIndex,
@@ -39,13 +40,14 @@ export interface DeviationScenario {
 
 /** First crossing's integer index for a cell under a convention. */
 export function cellIndex(set: IndexSet, cell: DeviationCell, convention: TrueCountRounding): number | null {
-  const e = entryFor(set, cell.id);
-  const b = e?.bands[0]?.upTo;
+  const v = cellValidation(set, cell.id, convention);
+  if (v.result?.transitions.length) return v.result.transitions[0].at;
+  const b = entryFor(set, cell.id)?.bands[0]?.upTo;
   return b === undefined || b === null ? null : integerIndex(b, convention);
 }
 
 export function filterCells(set: IndexSet, rules: TableRules, filter: DeviationFilter, convention: TrueCountRounding, missed: readonly string[] = []): DeviationCell[] {
-  const cells = usableCells(set, rules);
+  const cells = usableCells(set, rules, convention);
   if (typeof filter === "object") return cells.filter((c) => c.id === filter.cellId);
   switch (filter) {
     case "all":
@@ -129,8 +131,8 @@ export function generateDeviationScenario(
   const decks = rules.decks;
   for (let attempt = 0; attempt < 200; attempt++) {
     const cell = pick(cells, rng);
-    const entry = entryFor(set, cell.id)!;
-    const boundaries = entry.bands.filter((b) => b.upTo !== null).map((b) => integerIndex(b.upTo!, convention));
+    const v = cellValidation(set, cell.id, convention);
+    const boundaries = v.result?.transitions.map((t) => t.at) ?? [];
     if (!boundaries.length) continue;
     const target = pick(boundaries, rng) + pick([-2, -1, -1, 0, 0, 1, 1, 2], rng);
     if (Math.abs(target) > 8) continue;
@@ -154,8 +156,12 @@ export function generateDeviationScenario(
     const up = takeRank(pool, cell.up, rng);
     const player = [takeRank(pool, ranks[0], rng), takeRank(pool, ranks[1], rng)];
     const seenHand = runningCount([up, ...player]);
-    const nDiscards = Math.round(52 * (decks - D)) - 3;
+    // Dealt so far: discards, the player's two cards, the upcard and the face-down hole card.
+    // Cards still in the shoe = 52·D exactly, the same convention as the table and the validator.
+    const nDiscards = Math.round(52 * (decks - D)) - 4;
     if (nDiscards < 0) continue;
+    // The hole card is dealt but unseen: it is not counted and is not in the shoe.
+    pool.splice(randomInt(rng, pool.length), 1);
     const built = discardsWithCount(pool, nDiscards, rc - seenHand, rng);
     if (!built) continue;
 

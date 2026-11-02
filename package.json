@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit",
     "generate:strategy": "tsx scripts/generate-strategy.ts",
     "chart": "tsx scripts/print-chart.ts",
-    "generate:indices": "tsx scripts/generate-indices.ts"
+    "generate:indices": "tsx scripts/generate-indices.ts",
+    "validate:indices": "tsx scripts/validate-indices.ts",
+    "report:indices": "tsx scripts/index-report.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

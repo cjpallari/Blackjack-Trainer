@@ -6,9 +6,12 @@ import { basicStrategyAction, withShoe, type GameState } from "@/lib/blackjack/e
 import { fullShoeCounts, UpcardAnalyzer } from "@/lib/blackjack/analysis/ca";
 import { cellCurves, combineDepths, bandsFromCurve, allowedActions, compositionAtTrueCount, pairThreshold } from "@/lib/blackjack/analysis/index-gen";
 import { CELL_BY_ID, DEVIATION_CELLS } from "@/lib/blackjack/deviations/definitions";
+import { toDeviationAction } from "@/lib/blackjack/deviations/validation";
 import {
   bucketRepresentative,
   cellUnavailableReason,
+  cellValidation,
+  mcPlayAt,
   entryFor,
   evaluateDeviation,
   integerIndex,
@@ -167,9 +170,10 @@ describe("index registry", () => {
         if (Math.abs(computed - p.index) > 1) misses.push(`${cell.id}:${p.above} computed ${computed} vs published ${p.index}`);
       });
     }
-    // Only the two-card 16 v 10 stand index disagrees by more than one (see README); it is disabled as unstable without surrender.
-    expect(misses).toEqual([expect.stringMatching(/^h16v10:stand computed 2 vs published 0$/)]);
-    expect(entryFor(set({ decks: 6, dealerHitsSoft17: false, surrender: "none" }), "h16v10")!.status).toBe("unstable");
+    // After the Phase 7.1 visible-card fix every published value is reproduced within ±1.
+    expect(misses).toEqual([]);
+    const t16 = entryFor(s6, "h16v10")!.pairs[0].depthThresholds;
+    expect(Math.round((t16[0]! + t16[1]!) / 2) + 0).toBe(0);
   });
 
   it("selects sets by decks, soft-17, DAS and surrender, and refuses unsupported rules", () => {
@@ -181,18 +185,16 @@ describe("index registry", () => {
     // Six-deck values are not reused for double deck: these sets differ.
     const two = set({ decks: 2, dealerHitsSoft17: false });
     const six = set({ decks: 6, dealerHitsSoft17: false });
-    expect(entryFor(two, "h11v1")!.status).toBe("unstable");
-    expect(entryFor(six, "h11v1")!.status).toBe("active");
     expect(entryFor(two, "p10v6")!.bands).not.toEqual(entryFor(six, "p10v6")!.bands);
   });
 
   it("disables plays the rules don't allow", () => {
     const s = set({ decks: 6, dealerHitsSoft17: false, surrender: "none" });
-    expect(cellUnavailableReason(s, CELL_BY_ID.get("h15v9")!, { ...DEFAULT_RULES, decks: 6, surrender: "none" })).toMatch(/surrender/);
+    expect(cellUnavailableReason(s, CELL_BY_ID.get("h15v9")!, { ...DEFAULT_RULES, decks: 6, surrender: "none" }, "floor")).toMatch(/surrender/);
     const ls = set({ decks: 6, dealerHitsSoft17: false, surrender: "late" });
-    expect(cellUnavailableReason(ls, CELL_BY_ID.get("h15v9")!, { ...DEFAULT_RULES, decks: 6, surrender: "late" })).toBeNull();
-    expect(cellUnavailableReason(s, CELL_BY_ID.get("h9v2")!, { ...DEFAULT_RULES, decks: 6, doubleRestriction: "10-11" })).toMatch(/Doubling 9/);
-    expect(cellUnavailableReason(s, CELL_BY_ID.get("insurance")!, { ...DEFAULT_RULES, decks: 6, insurance: false })).toMatch(/Insurance/);
+    expect(cellUnavailableReason(ls, CELL_BY_ID.get("h15v9")!, { ...DEFAULT_RULES, decks: 6, surrender: "late" }, "floor")).toBeNull();
+    expect(cellUnavailableReason(s, CELL_BY_ID.get("h9v2")!, { ...DEFAULT_RULES, decks: 6, doubleRestriction: "10-11" }, "floor")).toMatch(/Doubling 9/);
+    expect(cellUnavailableReason(s, CELL_BY_ID.get("insurance")!, { ...DEFAULT_RULES, decks: 6, insurance: false }, "floor")).toMatch(/Insurance/);
   });
 
   it("maps crossings to integer indices per true-count convention", () => {
@@ -206,27 +208,76 @@ describe("index registry", () => {
     expect(bucketRepresentative(-2, "truncate")).toBe(-2.5);
   });
 
-  it("applies thresholds exactly at the boundary, for positive and negative indices", () => {
-    const s = set({ decks: 6, dealerHitsSoft17: false, surrender: "none" });
-    for (const [id, cards, up] of [
-      ["h12v3", ["10", "2"], "3"],
-      ["h12v5", ["10", "2"], "5"],
-      ["h13v2", ["10", "3"], "2"],
-    ] as const) {
-      const cell = CELL_BY_ID.get(id)!;
-      expect(matchCell({ cards, up, fromSplit: false })?.id).toBe(id);
-      const i = integerIndex(entryFor(s, id)!.bands[0].upTo!, "floor");
-      const at = (tc: number) =>
-        evaluateDeviation(s, "floor", { cell, runningCount: tc * 2, decksEstimate: 2, deckTolerance: 0, legal: ["hit", "stand", "double"], basic: "hit" });
-      expect(at(i).countAction).toBe("stand");
-      expect(at(i - 1).countAction).toBe("hit");
+  it("applies every validated index exactly at its transition, under every convention", () => {
+    let checked = 0;
+    for (const conv of ["floor", "truncate", "nearest"] as const) {
+      for (const rules of [{ ...DEFAULT_RULES }, { ...DEFAULT_RULES, dealerHitsSoft17: false, surrender: "late" as const }]) {
+        const s = set(rules, conv);
+        for (const cell of DEVIATION_CELLS) {
+          if (cellUnavailableReason(s, cell, rules, conv)) continue;
+          const v = cellValidation(s, cell.id, conv);
+          for (const t of v.result!.transitions) {
+            const at = (tc: number) => mcPlayAt(v.result!, tc);
+            const here = at(t.at);
+            const below = at(t.at - 1);
+            if (!t.uncertain) {
+              expect(here.action, `${cell.id} ${conv} @${t.at}`).toBe(toDeviationAction(t.to));
+              expect(below.action).toBe(toDeviationAction(t.from));
+            } else {
+              // An unresolved crossing bucket accepts both plays.
+              expect([here.action, here.alternative]).toContain(toDeviationAction(t.to));
+            }
+            checked++;
+          }
+        }
+      }
     }
-    // Negative running count, negative true count: 12 v 4 hits below its index.
-    const c = CELL_BY_ID.get("h12v4")!;
-    const e = evaluateDeviation(s, "floor", { cell: c, runningCount: -9, decksEstimate: 3, deckTolerance: 0, legal: ["hit", "stand"], basic: "stand" });
-    expect(e.trueCount).toBe(-3);
-    expect(e.countAction).toBe("hit");
-    expect(e.deviates).toBe(true);
+    expect(checked).toBeGreaterThan(10);
+  });
+
+  it("never grades an unvalidated index", () => {
+    const four = set({ decks: 4 }, "floor");
+    const cellX = CELL_BY_ID.get("h12v3")!;
+    expect(cellValidation(four, "h12v3", "floor").status).toBe("experimental");
+    expect(cellUnavailableReason(four, cellX, { ...DEFAULT_RULES, decks: 4 }, "floor")).toMatch(/Experimental/);
+    expect(() =>
+      evaluateDeviation(four, "floor", { cell: cellX, runningCount: 10, decksEstimate: 2, deckTolerance: 0, legal: ["hit", "stand"], basic: "hit" }),
+    ).toThrow(/not validated/);
+  });
+
+  it("uses the nearest resolved bucket beyond the tested range and accepts both plays only on a crossing", () => {
+    const r = {
+      verdict: "validated" as const,
+      note: "",
+      transitions: [{ from: "hit" as const, to: "stand" as const, at: 2, uncertain: true }],
+      buckets: [
+        { tc: 0, n: 200, best: "hit" as const, runnerUp: "stand" as const, margin: 0.01, se: 0.002, resolved: true },
+        { tc: 1, n: 200, best: "hit" as const, runnerUp: "stand" as const, margin: 0.001, se: 0.002, resolved: false },
+        { tc: 2, n: 200, best: "stand" as const, runnerUp: "hit" as const, margin: 0.001, se: 0.002, resolved: false },
+        { tc: 3, n: 200, best: "stand" as const, runnerUp: "hit" as const, margin: 0.01, se: 0.002, resolved: true },
+        { tc: 8, n: 3, best: "hit" as const, runnerUp: "stand" as const, margin: 0.001, se: 0.05, resolved: false },
+      ],
+    };
+    expect(mcPlayAt(r, -5)).toEqual({ action: "hit", alternative: null });
+    expect(mcPlayAt(r, 1)).toEqual({ action: "hit", alternative: "stand" });
+    expect(mcPlayAt(r, 2)).toEqual({ action: "stand", alternative: "hit" });
+    expect(mcPlayAt(r, 3)).toEqual({ action: "stand", alternative: null });
+    // A thin, noisy edge bucket does not override the resolved trend.
+    expect(mcPlayAt(r, 8)).toEqual({ action: "stand", alternative: null });
+    expect(mcPlayAt(r, 14)).toEqual({ action: "stand", alternative: null });
+  });
+
+  it("looks up exact true counts with floor buckets and handles negative counts per convention", () => {
+    const s = set({}, "exact");
+    const cellX = DEVIATION_CELLS.find((c) => !cellUnavailableReason(s, c, DEFAULT_RULES, "exact"))!;
+    const v = cellValidation(s, cellX.id, "floor").result!;
+    // −1.4 exact → floor bucket −2 (raw ≥ −2 but < −1).
+    const e = evaluateDeviation(s, "exact", { cell: cellX, runningCount: -7, decksEstimate: 5, deckTolerance: 0, legal: cellX.actions, basic: cellX.actions[0] });
+    expect(e.trueCount).toBe(-1.4);
+    expect(e.countAction).toBe(mcPlayAt(v, -2).action);
+    expect(trueCount(-7, 5, "truncate")).toBe(-1);
+    expect(trueCount(-7, 5, "floor")).toBe(-2);
+    expect(trueCount(-7, 5, "nearest")).toBe(-1);
   });
 
   it("only matches two-card, unsplit hands", () => {
@@ -264,7 +315,8 @@ describe("deviation trainer scenarios", () => {
       const all = [...sc.discards, ...sc.player, sc.dealerUp];
       expect(new Set(all.map((c) => c.id)).size).toBe(all.length);
       expect(sc.runningCount).toBe(runningCount(all));
-      expect(52 * rules.decks - all.length + 1).toBe(Math.round(52 * sc.decksRemaining) + 1 - 0);
+      // Cards in the shoe exclude the dealt-but-unseen hole card, as at the table.
+      expect(52 * rules.decks - all.length - 1).toBe(Math.round(52 * sc.decksRemaining));
       expect(sc.trueCount).toBe(trueCount(sc.runningCount, sc.decksRemaining, "truncate"));
       expect(Math.abs(sc.trueCount)).toBeLessThanOrEqual(8);
       (sides.get(sc.cell.id) ?? sides.set(sc.cell.id, new Set()).get(sc.cell.id)!).add(sc.evaluation.deviates);

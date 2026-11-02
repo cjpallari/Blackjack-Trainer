@@ -88,36 +88,29 @@ Shoe handling:
 - **Splits** don't model resplitting. This understates split EV: 8,8 v 10 is about 0.006–0.007 low, and the overall house edge is about 0.03–0.05% worse than published.
 - **The published 10,10 split column forces resplitting**, so it isn't comparable. A test checks our value against an independent single-split formula instead.
 
-### How indices are computed
+### How indices are computed and validated
 
-`npm run generate:indices` (about 2 minutes) writes `deviations/data/hilo-indices.json`.
+The full technical report is in [docs/index-validation.md](docs/index-validation.md). Two steps produce the indices:
 
-- **Shoe model:** the remaining shoe at true count *t* is *D* decks, with the running count spread over the Hi-Lo ranks in proportion. Exactly *D* decks remain, so decks remaining are exact.
-- **Evaluation:** every competing play is evaluated exactly at integer true counts −10…+10, at about 60% and about 30% of the shoe left.
-- **Scope:** two-card hands only.
-- **Stability rule:** an index is used only if its crossing moves by at most 1 true count between the two depths. Otherwise it is disabled as unstable, with the reason shown.
-- **Cross-check:** generated values are compared with the published six-deck I18 / Fab 4. Of 22 published values, 21 are within ±1 and 13 match exactly. The exception is the two-card **16 v 10** stand index, at about +2 against a published 0. It is disabled where it's unstable (all no-surrender games and all 2- and 4-deck games).
-- **True-count convention:** the true count is the user's rounding setting applied to (visible running count ÷ quarter-deck estimate of undealt cards). Each integer TC stands for a band of raw counts, and the play for that integer is the play at the band's middle (`bucketRepresentative`). The Deviation Trainer and the table use the same `evaluateDeviation`.
-- **Deck-estimate tolerance at the table:** a play consistent with any deck estimate within ±¼ deck (1–2 decks) or ±½ deck (more decks) is accepted and marked borderline.
-- **Hand coverage at the table:** only two-card, unsplit hands, 10,10 pairs and insurance are graded for deviations.
+1. **Synthetic estimate.** `npm run generate:indices` writes `deviations/data/hilo-indices.json`. The unseen cards at true count *t* are modelled as *D* decks with the running count spread over the Hi-Lo ranks. Each hand is evaluated on those cards plus its own visible cards, at about 60% and 30% of the shoe left. These numbers are shown only as *experimental* estimates.
+2. **Conditional Monte Carlo.** `npm run validate:indices` (about 23 minutes on 9 workers) writes `deviations/data/hilo-validation.json`. It samples real shoe states and computes exact action EVs for each state's true remaining cards, as an offline oracle. Results are grouped by the observable true count (visible running count ÷ quarter-deck estimate of the cards still in the shoe) under floor, truncate and nearest rounding, with clustered standard errors.
+
+**Only Monte Carlo-validated indices are graded or practised.** Validated means:
+- each change of play lies between statistically resolved buckets, with at most one unresolved bucket at the crossing;
+- the two halves of the sample agree within one true count.
+
+The play for each integer true count is that bucket's Monte Carlo best play. On an unresolved crossing bucket, shown as "±1", both plays are accepted. Exact true counts use floor buckets. The trainer, the table and the validator all use the same deck convention: cards in the shoe, excluding the dealt hole card.
+
+At the table, deviations are graded only for two-card, unsplit hands, 10,10 and insurance. A play consistent with any deck estimate within ±¼ deck (1–2 decks) or ±½ deck (more decks) is also accepted.
 
 ### Supported rulesets
 
-Every supported ruleset has its own computed index set; six-deck numbers are never reused for other deck counts. Totals are I18 plays, plus Fab 4 when surrender is offered. Double-after-split only changes the 10,10 values. Plays also drop out when double restrictions forbid them or insurance is off.
-
-| Decks | Soft 17 | Surrender | Active | Disabled (unstable across depths) |
-|---|---|---|---|---|
-| 2 | S17 | none | 12/18 | 16 v 10, 11 v A, 9 v 2, 10 v A, 9 v 7, 16 v 9 |
-| 2 | S17 | late | 15/21 | 16 v 10, 11 v A, 9 v 2, 10 v A, 9 v 7, 16 v 9 |
-| 2 | H17 | none | 13/18 | 16 v 10, 11 v A, 9 v 2, 9 v 7, 16 v 9 |
-| 2 | H17 | late | 16/21 | 16 v 10, 11 v A, 9 v 2, 9 v 7, 16 v 9 |
-| 4 | S17/H17 | none | 14/18 | 16 v 10, 11 v A, 9 v 7, 16 v 9 |
-| 4 | S17/H17 | late | 17/21 | 16 v 10, 11 v A, 9 v 7, 16 v 9 |
-| 6 | S17/H17 | none | 17/18 | 16 v 10 |
-| 6 | S17/H17 | late | 21/21 | — |
-| 8 | S17/H17 | none / late | all | — |
-
-**Unsupported:** single deck (card removal at single-deck depths is too large for the composition model) and non-standard variants.
+| Decks | Validated | Notes |
+|---|---|---|
+| 2 (H17 / S17, any DAS, with or without late surrender) | all, except 16 v 9 in S17 without surrender (experimental) | Main target ruleset |
+| 6 (H17 / S17) | all | 16 of 22 published six-deck values matched exactly, all within ±1 |
+| 4, 8 | none: experimental (synthetic only, not Monte Carlo-tested) | |
+| 1, non-standard variants | unsupported | |
 
 No EV gain from deviations is estimated anywhere. Index plays are graded right or wrong only, and the off-the-top EV-loss figure covers basic-strategy mistakes away from index plays.
 

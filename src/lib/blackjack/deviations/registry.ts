@@ -17,6 +17,7 @@ import { evaluateDecision, strategyTableFor, type PlayerAction } from "../strate
 import type { Band, IndexSetEntry, IndexSetKey } from "../analysis/index-gen";
 import { CELL_BY_ID, DEVIATION_CELLS, type DeviationAction, type DeviationCell } from "./definitions";
 import data from "./data/hilo-indices.json";
+import { toDeviationAction, validationFor, type IndexValidation, type McConventionResult } from "./validation";
 
 export const SUPPORTED_INDEX_DECKS = [2, 4, 6, 8] as const;
 
@@ -167,21 +168,82 @@ export function entryFor(set: IndexSet, cellId: string): IndexSetEntry | undefin
   return set.cells.find((c) => c.id === cellId);
 }
 
-/** Why a cell can't be used under these rules, or null if usable. */
-export function cellUnavailableReason(set: IndexSet, cell: DeviationCell, rules: TableRules): string | null {
+/** Monte Carlo validation status of a cell for this set and true-count convention. */
+export function cellValidation(set: IndexSet, cellId: string, convention: TrueCountRounding): IndexValidation {
+  return validationFor(set, cellId, convention);
+}
+
+/**
+ * Why a cell can't be graded under these rules and convention, or null if it
+ * can. Only Monte Carlo-validated indices are graded; synthetic stability
+ * alone is not enough.
+ */
+export function cellUnavailableReason(set: IndexSet, cell: DeviationCell, rules: TableRules, convention: TrueCountRounding): string | null {
   const e = entryFor(set, cell.id);
   if (!e) return "Not in this index set.";
-  if (e.status === "unstable") return e.note ?? "Index is not stable across shoe depths.";
-  if (e.status === "no-deviation") return e.note ?? "No deviation in range.";
   if (cell.kind === "insurance" && !rules.insurance) return "Insurance is not offered at this table.";
   if (!set.surrender && cell.published.every((p) => p.above === "surrender")) return "This is a surrender play; the table does not offer surrender.";
-  if (cell.hand?.kind === "hard" && e.bands.some((b) => b.action === "double") && !canDoubleTotal(rules, cell.hand.total, false))
+  if (cell.hand?.kind === "hard" && cell.actions.includes("double") && !canDoubleTotal(rules, cell.hand.total, false))
     return `Doubling ${cell.hand.total} is not allowed under these rules.`;
+  const v = cellValidation(set, cell.id, convention);
+  if (v.status !== "validated") return `${v.status === "experimental" ? "Experimental" : "Disabled"}: ${v.reason}`;
   return null;
 }
 
-export function usableCells(set: IndexSet, rules: TableRules): DeviationCell[] {
-  return DEVIATION_CELLS.filter((c) => cellUnavailableReason(set, c, rules) === null);
+export function usableCells(set: IndexSet, rules: TableRules, convention: TrueCountRounding): DeviationCell[] {
+  return DEVIATION_CELLS.filter((c) => cellUnavailableReason(set, c, rules, convention) === null);
+}
+
+/** Integer true count used to look up a Monte Carlo bucket (exact TCs use their floor). */
+function lookupTc(tc: number, convention: TrueCountRounding): number {
+  return convention === "exact" ? Math.floor(tc + 1e-9) : tc;
+}
+
+/**
+ * Play for an integer true count from validated Monte Carlo buckets.
+ *
+ * Validated results are monotone, so the play is taken from the nearest
+ * statistically resolved bucket(s). Only a true count lying between resolved
+ * buckets that favour DIFFERENT plays is uncertain; there both plays are
+ * accepted. Thinly sampled buckets at the edges of the tested range, or
+ * counts beyond it, take the play of the nearest resolved bucket.
+ */
+export function mcPlayAt(result: McConventionResult, tc: number): { action: DeviationAction; alternative: DeviationAction | null } {
+  const resolved = result.buckets.filter((b) => b.resolved);
+  const exact = resolved.find((b) => b.tc === tc);
+  if (exact) return { action: toDeviationAction(exact.best), alternative: null };
+  const below = [...resolved].reverse().find((b) => b.tc < tc);
+  const above = resolved.find((b) => b.tc > tc);
+  if (!below) return { action: toDeviationAction(above!.best), alternative: null };
+  if (!above || above.best === below.best) return { action: toDeviationAction(below.best), alternative: null };
+  // On the crossing: use the point estimate, accept the other side too.
+  const point = result.buckets.find((b) => b.tc === tc);
+  const best = point && (point.best === above.best || point.best === below.best) ? point.best : above.best;
+  const other = best === above.best ? below.best : above.best;
+  return { action: toDeviationAction(best), alternative: toDeviationAction(other) };
+}
+
+/** e.g. "Stand at TC ≥ +1, otherwise hit." from the validated transitions. */
+export function describeValidated(result: McConventionResult): string {
+  const t = result.transitions;
+  if (!t.length) return "No deviation in the tested range.";
+  const mark = (x: (typeof t)[number]) => (x.uncertain ? " (±1)" : "");
+  if (t.length === 1) {
+    const w = ACTION_WORD[toDeviationAction(t[0].to)];
+    return `${w[0].toUpperCase()}${w.slice(1)} at TC ≥ ${formatTc(t[0].at)}${mark(t[0])}, otherwise ${ACTION_WORD[toDeviationAction(t[0].from)]}.`;
+  }
+  const parts = [`${ACTION_WORD[toDeviationAction(t[0].from)]} below TC ${formatTc(t[0].at)}`];
+  for (const x of t) parts.push(`${ACTION_WORD[toDeviationAction(x.to)]} from ${formatTc(x.at)}${mark(x)}`);
+  const s = parts.join(", ");
+  return `${s[0].toUpperCase()}${s.slice(1)}.`;
+}
+
+/** Text for a cell under a convention: validated index, or the synthetic estimate labelled experimental. */
+export function indexDescription(set: IndexSet, cellId: string, convention: TrueCountRounding): string {
+  const v = cellValidation(set, cellId, convention);
+  if (v.status === "validated" && v.result) return describeValidated(v.result);
+  const e = entryFor(set, cellId);
+  return e ? `Synthetic estimate: ${describeIndex(e, convention)}` : "—";
 }
 
 // ---------------------------------------------------------------------------
@@ -220,20 +282,29 @@ export interface DeviationEvaluation {
   readonly indexPlays: readonly DeviationAction[];
 }
 
-function countActionAt(entry: IndexSetEntry, tc: number, convention: TrueCountRounding, legal: readonly DeviationAction[], basic: DeviationAction) {
-  const a = actionInBands(entry.bands, bucketRepresentative(tc, convention));
-  return legal.includes(a) ? a : basic;
+function playsAt(result: McConventionResult, tc: number, convention: TrueCountRounding, legal: readonly DeviationAction[], basic: DeviationAction): DeviationAction[] {
+  const p = mcPlayAt(result, lookupTc(tc, convention));
+  const ok = (a: DeviationAction) => (legal.includes(a) ? a : basic);
+  return p.alternative ? [ok(p.action), ok(p.alternative)] : [ok(p.action)];
 }
 
+/**
+ * Count-adjusted play for a validated index. Throws for unvalidated cells:
+ * callers must check cellUnavailableReason first, so unvalidated indices are
+ * never graded as known truths.
+ */
 export function evaluateDeviation(set: IndexSet, convention: TrueCountRounding, input: DeviationInput): DeviationEvaluation {
   const entry = entryFor(set, input.cell.id);
   if (!entry) throw new Error(`No index for ${input.cell.id}`);
+  const v = cellValidation(set, input.cell.id, convention);
+  if (v.status !== "validated" || !v.result) throw new Error(`${input.cell.id} is not validated for this ruleset (${v.reason})`);
+  const result = v.result;
   const tc = trueCount(input.runningCount, input.decksEstimate, convention);
-  const countAction = countActionAt(entry, tc, convention, input.legal, input.basic);
-  const acceptable = new Set<DeviationAction>([countAction]);
+  const [countAction, ...alt] = playsAt(result, tc, convention, input.legal, input.basic);
+  const acceptable = new Set<DeviationAction>([countAction, ...alt]);
   for (let d = input.decksEstimate - input.deckTolerance; d <= input.decksEstimate + input.deckTolerance + 1e-9; d += 0.25) {
     if (d < 0.25) continue;
-    acceptable.add(countActionAt(entry, trueCount(input.runningCount, d, convention), convention, input.legal, input.basic));
+    for (const a of playsAt(result, trueCount(input.runningCount, d, convention), convention, input.legal, input.basic)) acceptable.add(a);
   }
   return {
     cellId: input.cell.id,
@@ -244,8 +315,8 @@ export function evaluateDeviation(set: IndexSet, convention: TrueCountRounding, 
     acceptable: [...acceptable],
     deviates: countAction !== input.basic,
     borderline: acceptable.size > 1,
-    indexText: describeIndex(entry, convention),
-    indexPlays: [...new Set(entry.bands.map((b) => b.action))],
+    indexText: describeValidated(result),
+    indexPlays: [...new Set(result.buckets.map((b) => toDeviationAction(b.best)))],
   };
 }
 

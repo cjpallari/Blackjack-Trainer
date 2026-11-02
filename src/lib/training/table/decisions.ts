@@ -119,7 +119,7 @@ export function deviationFromView(
   const { set } = ctx.resolution;
   if (!view.count.valid) return null;
   const cell = insurance ? CELL_INSURANCE : matchCell(hand);
-  if (!cell || cellUnavailableReason(set, cell, rules)) return null;
+  if (!cell || cellUnavailableReason(set, cell, rules, ctx.convention)) return null;
   return evaluateDeviation(set, ctx.convention, {
     cell,
     runningCount: view.count.runningCount,

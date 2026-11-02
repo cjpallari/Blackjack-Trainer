@@ -1,7 +1,7 @@
 /**
  * Hi-Lo index generation with the exact finite-shoe analyzer.
  *
- * Model of "the remaining shoe at true count t with D decks left": D fresh
+ * Model of "the unseen cards at true count t with D decks left": D fresh
  * decks, with RC = t·D shifted in proportion to the Hi-Lo tags: each low rank
  * (2–6) loses RC/10 cards; the high ranks gain RC/2 cards in proportion to
  * their share (tens 0.4·RC, aces 0.1·RC); neutral ranks are unchanged, so
@@ -40,24 +40,33 @@ export function depthsFor(decks: number): [number, number] {
 
 export type ActionEVMap = Partial<Record<DeviationAction, number>>;
 
-/** EVs of each candidate action for a cell at one composition (per unit bet; insurance per unit insured). */
+/**
+ * EVs of each candidate action for a cell, where `comp` is the UNSEEN
+ * remainder (undealt cards plus the hole card) at the target true count.
+ *
+ * The player's true count includes the visible hand and upcard, so the
+ * model shoe must describe what is left after them. Each hand composition is
+ * evaluated on comp + its own visible cards, which the analyzer then removes.
+ * (Before Phase 7.1 the visible cards were removed from the model shoe
+ * instead, shifting the effective true count by their Hi-Lo tags ÷ decks.)
+ */
 export function cellEVs(cell: DeviationCell, comp: Float64Array, h17: boolean, das: boolean): ActionEVMap {
   const up = cell.up;
-  const c = Float64Array.from(comp);
-  c[up] -= 1;
   if (cell.kind === "insurance") {
-    // Two average player cards are also out of the shoe.
-    const n = c.reduce((a, b) => a + b, 0);
-    const tens = c[10] * (1 - 2 / n);
-    const p = tens / (n - 2);
-    return { insure: 3 * p - 1, decline: 0 };
+    const n = comp.reduce((a, b) => a + b, 0);
+    return { insure: (3 * comp[10]) / n - 1, decline: 0 };
   }
+  const withVisible = (cards: readonly PointRank[]) => {
+    const c = Float64Array.from(comp);
+    for (const r of cards) c[r] += 1;
+    return c; // the upcard is not added: UpcardAnalyzer takes the composition after the upcard
+  };
   const hand = cell.hand!;
-  const a = new UpcardAnalyzer(c, up, h17);
   const out: ActionEVMap = {};
   if (hand.kind === "pair") {
     const r = hand.rank;
-    const e = a.handEVs([r, r]);
+    const c = withVisible([r, r]);
+    const e = new UpcardAnalyzer(c, up, h17).handEVs([r, r]);
     const cs = Float64Array.from(c);
     cs[r] -= 1;
     const sp = new UpcardAnalyzer(cs, up, h17).splitEVs(r);
@@ -74,9 +83,9 @@ export function cellEVs(cell: DeviationCell, comp: Float64Array, h17: boolean, d
     for (const i of POINT_RANKS) {
       for (const j of POINT_RANKS) {
         if (i >= j || i === 1 || i + j !== hand.total) continue;
-        const wi = 2 * Math.max(0, c[i]) * Math.max(0, c[j]);
+        const wi = 2 * Math.max(0, comp[i]) * Math.max(0, comp[j]);
         if (wi === 0) continue;
-        const e = a.handEVs([i as PointRank, j as PointRank]);
+        const e = new UpcardAnalyzer(withVisible([i as PointRank, j as PointRank]), up, h17).handEVs([i as PointRank, j as PointRank]);
         w += wi;
         stand += wi * e.stand;
         hit += wi * e.hit;
