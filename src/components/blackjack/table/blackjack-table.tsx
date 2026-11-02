@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, FastForward, Info, RotateCcw, Shuffle } from "lucide-react";
+import { AlertTriangle, Calculator, FastForward, Info, RotateCcw, Shuffle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field, Kbd, Segmented, StatTile } from "@/components/training/controls";
 import { Chip, DealerSpot, SeatSpot, ShoeGraphic, TrayGraphic } from "@/components/blackjack/table/table-parts";
+import { CheckpointFeedback, CountCheckPanel, CountHud, DecisionFeedback, HintChip, TrainingSettingsPanel } from "@/components/blackjack/table/training-ui";
+import { ShoeReportView } from "@/components/training/shoe-report";
 import { useHotkeys } from "@/hooks/use-hotkeys";
 import { useSettings } from "@/hooks/use-store";
 import { useTableController } from "@/hooks/use-table";
@@ -50,7 +52,8 @@ export function BlackjackTable() {
   }, [rules.minBet, rules.maxBet]);
 
   const human = view?.seats.find((s) => s.kind === "human");
-  const betting = !!view && (view.phase === "idle" || view.settled);
+  const checkOpen = !!t.pending;
+  const betting = !!view && (view.phase === "idle" || view.settled) && !checkOpen;
   const myTurn = !!view && view.phase === "playerTurn" && view.available.length > 0;
   const pendingError = t.betError(bet);
   const chips = CHIPS.filter((c) => c <= rules.maxBet);
@@ -62,6 +65,8 @@ export function BlackjackTable() {
   };
   const addChip = (c: number) => betting && setBet((b) => Math.min(rules.maxBet, b + c));
   const setSim = (patch: Partial<typeof sim>) => setSettings((s) => ({ ...s, sim: { ...s.sim, ...patch } }));
+  const setTraining = (patch: Partial<typeof sim.training>) => setSettings((s) => ({ ...s, sim: { ...s.sim, training: { ...s.sim.training, ...patch } } }));
+  const recommended = new Set(t.hint?.acceptable ?? []);
 
   useHotkeys({
     h: () => t.act("hit"),
@@ -76,6 +81,7 @@ export function BlackjackTable() {
     "3": () => chips[2] && addChip(chips[2]),
     "4": () => chips[3] && addChip(chips[3]),
     backspace: () => betting && setBet(0),
+    c: () => t.canCheck && t.requestCheck(),
   });
 
   const seatCountNow = Math.min(MAX_SEATS, rules.aiPlayers + 1);
@@ -84,10 +90,36 @@ export function BlackjackTable() {
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_300px]">
       <div className="min-w-0 space-y-3">
+        {t.report && (
+          <div className="rounded-xl border border-primary/40 bg-card p-4 sm:p-5">
+            <ShoeReportView report={t.report} />
+            <div className="mt-4 flex justify-end">
+              <Button onClick={t.dismissReport}>Continue to the next shoe</Button>
+            </div>
+          </div>
+        )}
+        {t.hud && <CountHud hud={t.hud} />}
         <Felt view={view} rules={rules} instant={sim.animation === "instant"} />
 
-        <div className="flex min-h-14 flex-wrap items-center justify-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5">
+        {t.pending && (
+          <CountCheckPanel
+            key={`${view?.roundNumber}-${t.pending.kind}`}
+            pending={t.pending}
+            askTrueCount={sim.training.checkpoints.askTrueCount}
+            askDecks={sim.training.checkpoints.askDecks}
+            rounding={settings.rounding}
+            deckAssistCards={t.deckAssistCards}
+            onSubmit={t.submitCheck}
+            onSkip={t.skipCheck}
+          />
+        )}
+        <div className={cn("flex min-h-14 flex-wrap items-center justify-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5", checkOpen && "hidden")}>
           {!view && <span className="text-sm text-muted-foreground">Setting up the table…</span>}
+          {myTurn && t.hint && (
+            <div className="flex w-full justify-center">
+              <HintChip hint={t.hint} />
+            </div>
+          )}
           {view && t.animating && (
             <Button variant="secondary" onClick={t.skipAnimation} className="gap-2">
               <FastForward className="size-4" /> Skip animation <Kbd>Space</Kbd>
@@ -101,7 +133,7 @@ export function BlackjackTable() {
                 variant="secondary"
                 disabled={!view!.available.includes(action)}
                 onClick={() => t.act(action)}
-                className="h-11 min-w-[5.5rem] gap-2 disabled:opacity-30"
+                className={cn("h-11 min-w-[5.5rem] gap-2 disabled:opacity-30", recommended.has(action) && "ring-2 ring-primary")}
               >
                 {ACTION_LABEL[action]} <Kbd>{key}</Kbd>
               </Button>
@@ -135,11 +167,27 @@ export function BlackjackTable() {
               {pendingError && bet > 0 && <span className="w-full text-center text-xs text-destructive">{pendingError}</span>}
             </>
           )}
+          {t.canCheck && !t.animating && (
+            <Button variant="ghost" size="sm" onClick={t.requestCheck} className="gap-1.5">
+              <Calculator className="size-3.5" /> Check count <Kbd>C</Kbd>
+            </Button>
+          )}
+        </div>
+        <div aria-live="polite" className="space-y-1.5">
+          {t.decisionFeedback && !checkOpen && <DecisionFeedback key={`${view?.roundNumber}-${t.shoeDecisions}`} d={t.decisionFeedback} />}
+          {t.checkpointFeedback && <CheckpointFeedback cp={t.checkpointFeedback} />}
+          {t.checkpointRecorded && <p className="text-center text-xs text-muted-foreground">Answer recorded. Feedback comes in the end-of-shoe report.</p>}
         </div>
         {t.error && <p className="text-center text-xs text-destructive">{t.error}</p>}
       </div>
 
       <aside className="space-y-4">
+        <TrainingSettingsPanel value={sim.training} onChange={setTraining} />
+        {view && (
+          <p className="text-xs text-muted-foreground">
+            Shoe {t.shoeNumber} · {t.shoeRounds} round{t.shoeRounds === 1 ? "" : "s"} played · {t.shoeDecisions} decision{t.shoeDecisions === 1 ? "" : "s"} logged
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-2">
           <StatTile label="Bankroll" value={human ? money(human.bankroll) : "—"} sub={t.stats.buyIns ? `incl. ${money(t.stats.buyIns)} rebuys` : `started ${money(sim.startingBankroll)}`} />
           <StatTile label="On the table" value={money(betting ? 0 : wager)} sub={human?.roundNet !== undefined ? `last round ${signed(human.roundNet)}` : " "} />

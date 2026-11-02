@@ -3,6 +3,9 @@ import { DECK_OPTIONS, DEFAULT_RULES, validateRules, type TableRules } from "../
 import { DEFAULT_BS_OPTIONS, type BSOptions } from "../training/basic-strategy";
 import { DEFAULT_RC_CONFIG, type RCConfig } from "../training/running-count";
 import { emptyStats, parseStats, type Stats } from "../training/stats";
+import { DEFAULT_CHECKPOINTS, type CheckpointConfig } from "../training/table/count-checks";
+import { emptyShoeHistory, parseShoeHistory, type ShoeHistory } from "../training/table/history";
+import { DEFAULT_INTERMEDIATE, type IntermediateOptions, type TrainingMode } from "../training/table/modes";
 import { createPersistentStore } from "./persistent-store";
 
 export interface Settings {
@@ -17,8 +20,17 @@ export interface Settings {
 
 export type AnimationSpeed = "instant" | "fast" | "normal" | "slow";
 
+export interface TableTrainingSettings {
+  mode: TrainingMode;
+  intermediate: IntermediateOptions;
+  checkpoints: CheckpointConfig;
+  /** Keep per-decision logs in saved shoe reports. */
+  keepDecisionDetail: boolean;
+}
+
 export interface SimSettings {
   animation: AnimationSpeed;
+  training: TableTrainingSettings;
   /** 0-based seat from first base. */
   humanSeat: number;
   startingBankroll: number;
@@ -32,7 +44,13 @@ export const DEFAULT_SETTINGS: Settings = {
   bs: DEFAULT_BS_OPTIONS,
   rc: DEFAULT_RC_CONFIG,
   tc: { decks: 6, timed: false, secondsPerQuestion: 8, showTrayGuides: false },
-  sim: { animation: "normal", humanSeat: 1, startingBankroll: 1000, lastBet: 10 },
+  sim: {
+    animation: "normal",
+    humanSeat: 1,
+    startingBankroll: 1000,
+    lastBet: 10,
+    training: { mode: "beginner", intermediate: DEFAULT_INTERMEDIATE, checkpoints: DEFAULT_CHECKPOINTS, keepDecisionDetail: false },
+  },
 };
 
 export function parseSettings(raw: unknown): Settings | null {
@@ -47,9 +65,19 @@ export function parseSettings(raw: unknown): Settings | null {
     bs: { ...DEFAULT_SETTINGS.bs, ...r.bs },
     rc: { ...DEFAULT_SETTINGS.rc, ...r.rc },
     tc: { ...DEFAULT_SETTINGS.tc, ...r.tc },
-    sim: { ...DEFAULT_SETTINGS.sim, ...r.sim },
+    sim: {
+      ...DEFAULT_SETTINGS.sim,
+      ...r.sim,
+      training: {
+        ...DEFAULT_SETTINGS.sim.training,
+        ...r.sim?.training,
+        intermediate: { ...DEFAULT_SETTINGS.sim.training.intermediate, ...r.sim?.training?.intermediate },
+        checkpoints: { ...DEFAULT_SETTINGS.sim.training.checkpoints, ...r.sim?.training?.checkpoints },
+      },
+    },
   };
 }
 
 export const settingsStore = createPersistentStore<Settings>("bjtrain.settings", DEFAULT_SETTINGS, parseSettings);
 export const statsStore = createPersistentStore<Stats>("bjtrain.stats", emptyStats(), parseStats);
+export const shoeHistoryStore = createPersistentStore<ShoeHistory>("bjtrain.shoes", emptyShoeHistory(), parseShoeHistory);

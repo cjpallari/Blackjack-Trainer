@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ProgressChart } from "@/components/dashboard/progress-chart";
+import { ShoeHistorySection } from "@/components/dashboard/shoe-history";
 import { StatTile, formatMs, pct } from "@/components/training/controls";
 import { useStats } from "@/hooks/use-store";
 import { parseScenarioKey } from "@/lib/training/basic-strategy";
@@ -44,6 +45,8 @@ export function Dashboard() {
           <StatTile label="Sessions" value={sessions} sub={`BS ${stats.sessions.bs} · RC ${stats.sessions.rc} · TC ${stats.sessions.tc} · Table ${stats.sessions.sim}`} />
         </div>
       </section>
+
+      <ShoeHistorySection />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <section className="rounded-xl border border-border bg-card p-4">

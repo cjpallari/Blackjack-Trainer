@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import type { PersistentStore } from "@/lib/storage/persistent-store";
-import { settingsStore, statsStore } from "@/lib/storage/stores";
+import { settingsStore, shoeHistoryStore, statsStore } from "@/lib/storage/stores";
 
 export function useStore<T>(store: PersistentStore<T>): [T, PersistentStore<T>["set"]] {
   const value = useSyncExternalStore(store.subscribe, store.get, store.getServer);
@@ -11,3 +11,4 @@ export function useStore<T>(store: PersistentStore<T>): [T, PersistentStore<T>["
 
 export const useSettings = () => useStore(settingsStore);
 export const useStats = () => useStore(statsStore);
+export const useShoeHistory = () => useStore(shoeHistoryStore);

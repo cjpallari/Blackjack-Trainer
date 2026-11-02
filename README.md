@@ -55,6 +55,29 @@ Shoe handling:
 
 `TableView.count` (exposed cards only) and `TableView.shoe` are there for the Phase 6 counting overlay, which should read only the view.
 
+## Counting and strategy training at the table
+
+`src/lib/training/table/` holds pure modules that observe the table session. They never change how the game runs.
+
+- **`training-table.ts`** coordinates everything:
+  - It grades each human decision *before* executing it, and executes the chosen action unchanged.
+  - It snapshots the count after every round, when all cards are face up.
+  - It opens count checks only at stable points: between rounds, or on the player's own turn for manual checks.
+  - It detects the end of the shoe exactly as the engine will: cut card, too few cards, or exhaustion.
+- **`count-checks.ts`** works out the correct answers from the table view, so a hole card that hasn't been revealed is never included.
+  - Decks remaining means undealt cards, including those behind the cut card.
+  - The expected true count uses the quarter-deck estimate and the user's rounding setting.
+  - Running count, true count, deck estimation and true-count arithmetic are graded separately.
+  - Skipped checks are recorded as unanswered and never count as correct.
+- **`decisions.ts`** grades decisions with the EV tables and tags each one:
+  - `table`: a two-card hand. The EV is the table's average for that total, so the loss is still an estimate.
+  - `approximate`: a multi-card hand, a hand after a split, or a split decision (resplits aren't modeled).
+  - `ungraded`: split aces that can be hit, which the tables don't model.
+- **`modes.ts`** is the single source of truth for what Beginner, Intermediate and Casino may show.
+- **`shoe-tracker.ts`** builds the end-of-shoe report, and **`history.ts`** handles versioned storage in localStorage (`bjtrain.shoes`).
+  - History keeps at most 200 shoes, and full decision logs only for the latest 20.
+  - Interrupted (count-invalid) shoes are excluded from counting aggregates.
+
 ## Rule assumptions
 
 - US hole card with dealer peek. No-hole-card (ENHC) games are not supported.
