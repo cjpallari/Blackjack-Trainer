@@ -15,6 +15,7 @@ export interface Settings {
   bs: BSOptions;
   rc: RCConfig;
   tc: { decks: number; timed: boolean; secondsPerQuestion: number; showTrayGuides: boolean };
+  dev: { filter: "all" | "valuable" | "positive" | "negative" | "missed" | string; showTrueCount: boolean; showTray: boolean };
   sim: SimSettings;
 }
 
@@ -26,6 +27,8 @@ export interface TableTrainingSettings {
   checkpoints: CheckpointConfig;
   /** Keep per-decision logs in saved shoe reports. */
   keepDecisionDetail: boolean;
+  /** Grade and hint count-based index plays when a validated index set exists. */
+  deviations: boolean;
 }
 
 export interface SimSettings {
@@ -44,12 +47,13 @@ export const DEFAULT_SETTINGS: Settings = {
   bs: DEFAULT_BS_OPTIONS,
   rc: DEFAULT_RC_CONFIG,
   tc: { decks: 6, timed: false, secondsPerQuestion: 8, showTrayGuides: false },
+  dev: { filter: "all", showTrueCount: true, showTray: false },
   sim: {
     animation: "normal",
     humanSeat: 1,
     startingBankroll: 1000,
     lastBet: 10,
-    training: { mode: "beginner", intermediate: DEFAULT_INTERMEDIATE, checkpoints: DEFAULT_CHECKPOINTS, keepDecisionDetail: false },
+    training: { mode: "beginner", intermediate: DEFAULT_INTERMEDIATE, checkpoints: DEFAULT_CHECKPOINTS, keepDecisionDetail: false, deviations: true },
   },
 };
 
@@ -65,6 +69,7 @@ export function parseSettings(raw: unknown): Settings | null {
     bs: { ...DEFAULT_SETTINGS.bs, ...r.bs },
     rc: { ...DEFAULT_SETTINGS.rc, ...r.rc },
     tc: { ...DEFAULT_SETTINGS.tc, ...r.tc },
+    dev: { ...DEFAULT_SETTINGS.dev, ...r.dev },
     sim: {
       ...DEFAULT_SETTINGS.sim,
       ...r.sim,

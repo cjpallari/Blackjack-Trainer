@@ -4,10 +4,22 @@
  * and never changes which actions are allowed.
  */
 import { pointRank, type PointRank, type Rank } from "../../blackjack/cards";
+import { CELL_BY_ID } from "../../blackjack/deviations/definitions";
 import { availableActions, type GameState } from "../../blackjack/engine";
 import type { TableRules } from "../../blackjack/rules";
 import { evaluateDecision, strategyTableFor, type HandCategory, type PlayerAction, type StrategyAdvice } from "../../blackjack/strategy";
-import type { TableView } from "../../blackjack/table-view";
+import { buildTableView, type TableView } from "../../blackjack/table-view";
+import type { TrueCountRounding } from "../../blackjack/counting";
+import type { DeviationAction } from "../../blackjack/deviations/definitions";
+import {
+  cellUnavailableReason,
+  evaluateDeviation,
+  matchCell,
+  type DeviationEvaluation,
+  type IndexSetResolution,
+} from "../../blackjack/deviations/registry";
+import { deckTolerance } from "../true-count";
+import { quarterDeckEstimate } from "./count-checks";
 import { scenarioKey } from "../basic-strategy";
 
 /**
@@ -39,7 +51,109 @@ export interface DecisionRecord {
   readonly category: HandCategory | null;
   /** Scenario key shared with the Basic Strategy trainer, e.g. "hard 16|10". */
   readonly key: string | null;
+  /** Count-based evaluation when this decision is an index play under an active index set. */
+  readonly deviation: DeviationGrade | null;
+  /**
+   * Correct under the strategy actually being graded: count-adjusted when a
+   * deviation applies, otherwise basic strategy. null when ungraded.
+   */
+  readonly countCorrect: boolean | null;
 }
+
+/**
+ * - followed: the count called for a deviation and the player made it
+ * - missed: the count called for a deviation and the player played basic strategy
+ * - wrong-deviation: no deviation was due, but the player made the index play anyway
+ * - held: no deviation was due and the player played basic strategy
+ * - other: a play that is neither basic nor the count-adjusted play
+ */
+export type DeviationOutcome = "followed" | "missed" | "wrong-deviation" | "held" | "other";
+
+export interface DeviationGrade extends DeviationEvaluation {
+  readonly outcome: DeviationOutcome;
+  readonly chosen: DeviationAction;
+}
+
+export interface DeviationContext {
+  readonly resolution: IndexSetResolution;
+  readonly convention: TrueCountRounding;
+}
+
+export function classifyDeviation(e: DeviationEvaluation, chosen: DeviationAction): DeviationOutcome {
+  const deviationPlays = new Set(e.acceptable.filter((a) => a !== e.basic));
+  if (e.deviates || (e.borderline && deviationPlays.size)) {
+    if (e.acceptable.includes(chosen)) return chosen === e.basic ? "held" : "followed";
+    return chosen === e.basic ? "missed" : "other";
+  }
+  if (chosen === e.basic) return "held";
+  return e.indexPlays.includes(chosen) ? "wrong-deviation" : "other";
+}
+
+/**
+ * Count-based evaluation using only what the player can see: the running
+ * count of exposed cards and a quarter-deck estimate of the undealt cards.
+ * Answers consistent with any deck estimate within the tolerance are accepted.
+ */
+export function deviationForState(
+  state: GameState,
+  ctx: DeviationContext | undefined,
+  hand: { cards: readonly Rank[]; up: Rank; fromSplit: boolean },
+  legal: readonly DeviationAction[],
+  basic: DeviationAction,
+  insurance = false,
+): DeviationEvaluation | null {
+  return deviationFromView(buildTableView(state), state.rules, ctx, hand, legal, basic, insurance);
+}
+
+/** Same evaluation from a table view (used for hints, so hints and grades always agree). */
+export function deviationFromView(
+  view: TableView,
+  rules: TableRules,
+  ctx: DeviationContext | undefined,
+  hand: { cards: readonly Rank[]; up: Rank; fromSplit: boolean },
+  legal: readonly DeviationAction[],
+  basic: DeviationAction,
+  insurance = false,
+): DeviationEvaluation | null {
+  if (!ctx || !ctx.resolution.supported) return null;
+  const { set } = ctx.resolution;
+  if (!view.count.valid) return null;
+  const cell = insurance ? CELL_INSURANCE : matchCell(hand);
+  if (!cell || cellUnavailableReason(set, cell, rules)) return null;
+  return evaluateDeviation(set, ctx.convention, {
+    cell,
+    runningCount: view.count.runningCount,
+    decksEstimate: quarterDeckEstimate(view.shoe.cardsInShoe),
+    deckTolerance: deckTolerance(rules.decks),
+    legal,
+    basic,
+  });
+}
+
+export interface TableHint {
+  readonly basic: StrategyAdvice | null;
+  /** Count-adjusted evaluation when this is an index play. */
+  readonly deviation: DeviationEvaluation | null;
+  readonly insurance: boolean;
+}
+
+/** Recommendation for the human's current decision (play or insurance), from the view only. */
+export function hintFromView(view: TableView, rules: TableRules, ctx: DeviationContext | undefined): TableHint | null {
+  const up = view.dealer.cards[0];
+  if (!up || up.faceDown) return null;
+  if (view.insuranceOffer) {
+    const human = view.seats.find((s) => s.kind === "human");
+    const cards = human?.hands[0]?.cards.flatMap((c) => (c.faceDown ? [] : [c.rank])) ?? [];
+    return { basic: null, insurance: true, deviation: deviationFromView(view, rules, ctx, { cards, up: up.rank, fromSplit: false }, ["insure", "decline"], "decline", true) };
+  }
+  const basic = adviceFromView(view, rules);
+  if (!basic || !view.turn) return null;
+  const hand = view.seats[view.turn.seat].hands[view.turn.hand];
+  const cards = hand.cards.flatMap((c) => (c.faceDown ? [] : [c.rank]));
+  return { basic, insurance: false, deviation: deviationFromView(view, rules, ctx, { cards, up: up.rank, fromSplit: hand.fromSplit }, view.available, basic.best) };
+}
+
+const CELL_INSURANCE = CELL_BY_ID.get("insurance")!;
 
 export function rulesLabel(r: TableRules): string {
   return [
@@ -57,7 +171,7 @@ export function rulesLabel(r: TableRules): string {
 }
 
 /** Grade the decision the human is about to make. Must be called before the action is executed. */
-export function gradeTableDecision(state: GameState, chosen: PlayerAction): DecisionRecord {
+export function gradeTableDecision(state: GameState, chosen: PlayerAction, ctx?: DeviationContext): DecisionRecord {
   const turn = state.turn;
   if (!turn) throw new Error("No decision pending.");
   const seat = state.seats[turn.seat];
@@ -85,6 +199,8 @@ export function gradeTableDecision(state: GameState, chosen: PlayerAction): Deci
       notes: ["Split aces that may be hit are not modelled by the strategy tables (they assume one card per split ace)."],
       category: null,
       key: null,
+      deviation: null,
+      countCorrect: null,
     };
   }
 
@@ -107,16 +223,51 @@ export function gradeTableDecision(state: GameState, chosen: PlayerAction): Deci
   const correct = advice.acceptable.includes(chosen);
   const bestEv = advice.evs[advice.best]!;
   const chosenEv = advice.evs[chosen];
+  const dev = deviationForState(state, ctx, { cards: base.cards, up: base.upcard, fromSplit: hand.fromSplit }, available, advice.best);
+  const deviation: DeviationGrade | null = dev ? { ...dev, chosen, outcome: classifyDeviation(dev, chosen) } : null;
+  const countCorrect = deviation ? deviation.acceptable.includes(chosen) : correct;
+  if (deviation) notes.push("Index play: graded against the count-adjusted strategy; EV at this count is not estimated.");
   return {
     ...base,
     best: advice.best,
     acceptable: advice.acceptable,
     correct,
-    evLoss: correct || chosenEv === undefined ? 0 : bestEv - chosenEv,
+    // Off-the-top EV loss only describes basic-strategy mistakes away from index plays.
+    evLoss: deviation ? null : correct || chosenEv === undefined ? 0 : bestEv - chosenEv,
     quality,
     notes,
     category: advice.category,
     key: scenarioKey(advice.row, up),
+    deviation,
+    countCorrect,
+  };
+}
+
+export interface InsuranceRecord {
+  readonly round: number;
+  readonly max: number;
+  readonly amount: number;
+  readonly chosen: "insure" | "decline";
+  /** Basic strategy never takes insurance. */
+  readonly basic: "decline";
+  readonly deviation: DeviationGrade | null;
+  /** Count-adjusted when an insurance index is active, otherwise vs basic (decline). */
+  readonly countCorrect: boolean;
+}
+
+export function gradeInsurance(state: GameState, amount: number, max: number, ctx?: DeviationContext): InsuranceRecord {
+  const chosen = amount > 0 ? "insure" : "decline";
+  const human = state.seats.find((s) => s.kind === "human")!;
+  const dev = deviationForState(state, ctx, { cards: human.hands[0].cards.map((c) => c.rank), up: state.dealer.cards[0].rank, fromSplit: false }, ["insure", "decline"], "decline", true);
+  const deviation: DeviationGrade | null = dev ? { ...dev, chosen, outcome: classifyDeviation(dev, chosen) } : null;
+  return {
+    round: state.roundNumber,
+    max,
+    amount,
+    chosen,
+    basic: "decline",
+    deviation,
+    countCorrect: deviation ? deviation.acceptable.includes(chosen) : chosen === "decline",
   };
 }
 

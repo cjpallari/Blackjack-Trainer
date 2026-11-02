@@ -4,20 +4,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettings, useShoeHistory, useStats } from "@/hooks/use-store";
 import { IllegalActionError, type GameEvent } from "@/lib/blackjack/engine";
 import { defaultRng } from "@/lib/blackjack/rng";
-import type { PlayerAction, StrategyAdvice } from "@/lib/blackjack/strategy";
+import type { PlayerAction } from "@/lib/blackjack/strategy";
 import { buildTableView, eventWeight, type TableView } from "@/lib/blackjack/table-view";
 import { betError, emptySessionStats, rebuy, type SessionStats } from "@/lib/blackjack/table-session";
 import type { AnimationSpeed } from "@/lib/storage/stores";
 import { recordSession, recordSimRound } from "@/lib/training/stats";
 import { actualFromView, type CheckpointActual, type CheckpointAnswer } from "@/lib/training/table/count-checks";
-import { adviceFromView, type DecisionRecord } from "@/lib/training/table/decisions";
+import { hintFromView, type DecisionRecord, type InsuranceRecord, type TableHint } from "@/lib/training/table/decisions";
 import { addReport } from "@/lib/training/table/history";
 import { assistanceFor, type Assistance } from "@/lib/training/table/modes";
-import type { CheckpointRecord, ShoeReport } from "@/lib/training/table/shoe-tracker";
+import type { CheckpointRecord, DeviationSetInfo, ShoeReport } from "@/lib/training/table/shoe-tracker";
 import {
   abandonShoe,
   canRequestCheck,
   createTrainingTable,
+  deviationContext,
+  trainingInsurance,
   requestCheck,
   skipCheck,
   submitCheck,
@@ -60,10 +62,16 @@ export interface TableController {
   assistance: Assistance;
   /** Live count data; null unless the mode shows it (and never while a check is open). */
   hud: CheckpointActual | null;
-  /** Basic-strategy recommendation for your turn, if the mode shows hints. */
-  hint: StrategyAdvice | null;
+  /** Basic and count-adjusted recommendation for your decision, if the mode shows hints. */
+  hint: TableHint | null;
   /** Feedback on your last decision, if the mode gives it immediately. */
   decisionFeedback: DecisionRecord | null;
+  insuranceFeedback: InsuranceRecord | null;
+  /** Insurance offer (dealer shows an Ace), with the maximum stake. */
+  insuranceOffer: { max: number } | null;
+  insure: (amount: number) => void;
+  /** Index set in use for this shoe, or why deviations are not graded. */
+  deviationSet: DeviationSetInfo | null;
   /** A count check to answer now (shown only once the table has settled). */
   pending: PendingCheck | null;
   canCheck: boolean;
@@ -98,6 +106,7 @@ export function useTableController(): TableController {
       checkpoints: training.checkpoints,
       rounding: settings.rounding,
       keepDecisionDetail: training.keepDecisionDetail,
+      deviations: training.deviations,
     }),
     [training, settings.rounding],
   );
@@ -227,12 +236,19 @@ export function useTableController(): TableController {
     skipAnimation: () => setRevealed(log.length),
     animating: revealed < log.length,
     error,
-    locked: session?.state.phase === "playerTurn" || revealed < log.length || checkOpen,
+    locked: session?.state.phase === "playerTurn" || session?.state.phase === "insurance" || revealed < log.length || checkOpen,
     assistance,
     // Built from the animated view, so it changes only as cards become visible.
     hud: assistance.liveCount && view && !checkOpen ? actualFromView(view, opts.rounding) : null,
-    hint: assistance.strategyHint && view && caughtUp && !checkOpen ? adviceFromView(view, rules) : null,
+    hint: assistance.strategyHint && view && caughtUp && !checkOpen ? hintFromView(view, rules, deviationContext(rules, opts)) : null,
     decisionFeedback: assistance.decisionFeedback === "immediate" ? (table?.lastDecision ?? null) : null,
+    insuranceFeedback: assistance.decisionFeedback === "immediate" ? (table?.lastInsurance ?? null) : null,
+    insuranceOffer: !checkOpen ? (view?.insuranceOffer ?? null) : null,
+    insure: (amount) => {
+      if (checkOpen || !view?.insuranceOffer) return;
+      run((t) => trainingInsurance(t, amount, opts, rng, Date.now()), false);
+    },
+    deviationSet: table?.tracker.deviationSet ?? null,
     pending,
     canCheck: !!table && caughtUp && canRequestCheck(table, opts),
     requestCheck: () => run((t) => requestCheck(t, opts), false),

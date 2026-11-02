@@ -37,6 +37,8 @@ export interface TableRules {
    * supported, so this is fixed at true.
    */
   readonly dealerPeeks: true;
+  /** Insurance offered when the dealer shows an Ace (pays 2:1, up to half the bet). */
+  readonly insurance: boolean;
   /** Fraction of the shoe dealt before the cut card. */
   readonly penetration: number;
   readonly aiPlayers: number;
@@ -59,6 +61,7 @@ export const DEFAULT_RULES: TableRules = {
   resplitAces: false,
   hitSplitAces: false,
   dealerPeeks: true,
+  insurance: true,
   penetration: 0.7,
   aiPlayers: 2,
   minBet: 10,
@@ -128,6 +131,7 @@ export function describeRules(r: TableRules): string {
     r.doubleAfterSplit ? "DAS" : "no DAS",
     r.doubleRestriction === "any2" ? "D any 2" : `D ${r.doubleRestriction}`,
     r.surrender === "late" ? "LS" : "no surrender",
+    r.insurance ? "insurance" : "no insurance",
   ];
   return parts.join(" · ");
 }

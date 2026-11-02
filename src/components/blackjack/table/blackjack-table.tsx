@@ -6,7 +6,16 @@ import { AlertTriangle, Calculator, FastForward, Info, RotateCcw, Shuffle } from
 import { Button } from "@/components/ui/button";
 import { Field, Kbd, Segmented, StatTile } from "@/components/training/controls";
 import { Chip, DealerSpot, SeatSpot, ShoeGraphic, TrayGraphic } from "@/components/blackjack/table/table-parts";
-import { CheckpointFeedback, CountCheckPanel, CountHud, DecisionFeedback, HintChip, TrainingSettingsPanel } from "@/components/blackjack/table/training-ui";
+import {
+  CheckpointFeedback,
+  CountCheckPanel,
+  CountHud,
+  DecisionFeedback,
+  HintChip,
+  InsuranceFeedback,
+  InsurancePanel,
+  TrainingSettingsPanel,
+} from "@/components/blackjack/table/training-ui";
 import { ShoeReportView } from "@/components/training/shoe-report";
 import { useHotkeys } from "@/hooks/use-hotkeys";
 import { useSettings } from "@/hooks/use-store";
@@ -66,7 +75,8 @@ export function BlackjackTable() {
   const addChip = (c: number) => betting && setBet((b) => Math.min(rules.maxBet, b + c));
   const setSim = (patch: Partial<typeof sim>) => setSettings((s) => ({ ...s, sim: { ...s.sim, ...patch } }));
   const setTraining = (patch: Partial<typeof sim.training>) => setSettings((s) => ({ ...s, sim: { ...s.sim, training: { ...s.sim.training, ...patch } } }));
-  const recommended = new Set(t.hint?.acceptable ?? []);
+  // Highlight the count-adjusted play when an index applies, otherwise basic strategy.
+  const recommended = new Set<string>(t.hint?.deviation ? t.hint.deviation.acceptable : (t.hint?.basic?.acceptable ?? []));
 
   useHotkeys({
     h: () => t.act("hit"),
@@ -82,6 +92,8 @@ export function BlackjackTable() {
     "4": () => chips[3] && addChip(chips[3]),
     backspace: () => betting && setBet(0),
     c: () => t.canCheck && t.requestCheck(),
+    i: () => t.insuranceOffer && t.insuranceOffer.max > 0 && t.insure(t.insuranceOffer.max),
+    n: () => t.insuranceOffer && t.insure(0),
   });
 
   const seatCountNow = Math.min(MAX_SEATS, rules.aiPlayers + 1);
@@ -115,11 +127,12 @@ export function BlackjackTable() {
         )}
         <div className={cn("flex min-h-14 flex-wrap items-center justify-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5", checkOpen && "hidden")}>
           {!view && <span className="text-sm text-muted-foreground">Setting up the table…</span>}
-          {myTurn && t.hint && (
+          {(myTurn || t.insuranceOffer) && t.hint && (
             <div className="flex w-full justify-center">
               <HintChip hint={t.hint} />
             </div>
           )}
+          {t.insuranceOffer && !t.animating && <InsurancePanel key={view?.roundNumber} max={t.insuranceOffer.max} onDecide={t.insure} />}
           {view && t.animating && (
             <Button variant="secondary" onClick={t.skipAnimation} className="gap-2">
               <FastForward className="size-4" /> Skip animation <Kbd>Space</Kbd>
@@ -174,6 +187,7 @@ export function BlackjackTable() {
           )}
         </div>
         <div aria-live="polite" className="space-y-1.5">
+          {t.insuranceFeedback && !checkOpen && <InsuranceFeedback r={t.insuranceFeedback} />}
           {t.decisionFeedback && !checkOpen && <DecisionFeedback key={`${view?.roundNumber}-${t.shoeDecisions}`} d={t.decisionFeedback} />}
           {t.checkpointFeedback && <CheckpointFeedback cp={t.checkpointFeedback} />}
           {t.checkpointRecorded && <p className="text-center text-xs text-muted-foreground">Answer recorded. Feedback comes in the end-of-shoe report.</p>}
@@ -186,6 +200,11 @@ export function BlackjackTable() {
         {view && (
           <p className="text-xs text-muted-foreground">
             Shoe {t.shoeNumber} · {t.shoeRounds} round{t.shoeRounds === 1 ? "" : "s"} played · {t.shoeDecisions} decision{t.shoeDecisions === 1 ? "" : "s"} logged
+            {t.deviationSet && (
+              <span className="block">
+                {"id" in t.deviationSet ? `Deviations graded with ${t.deviationSet.id}.` : `Deviations not graded: ${t.deviationSet.unavailable}`}
+              </span>
+            )}
           </p>
         )}
         <div className="grid grid-cols-2 gap-2">
@@ -251,7 +270,7 @@ export function BlackjackTable() {
             Limits {money(rules.minBet)}–{money(rules.maxBet)} · {Math.round(rules.penetration * 100)}% penetration · split to {rules.maxSplitHands} hands
             {rules.resplitAces ? " · resplit aces" : ""}
           </p>
-          <p>Other players bet the minimum and play basic strategy. Insurance is not offered.</p>
+          <p>Other players bet the minimum, play basic strategy and decline insurance.</p>
           <Link href="/settings" className="text-primary hover:underline">
             Change table rules →
           </Link>

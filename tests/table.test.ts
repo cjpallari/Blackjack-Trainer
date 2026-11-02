@@ -10,6 +10,7 @@ import {
   createTableSession,
   dealRound,
   humanBankroll,
+  insuranceDecision,
   playerAction,
   rebuy,
   type TableSession,
@@ -27,6 +28,7 @@ const rng = seededRng(77);
 
 /** Play the human with basic strategy until the round ends. */
 function playOut(s: TableSession, r: Rng): TableSession {
+  if (s.state.phase === "insurance") s = insuranceDecision(s, 0, r);
   while (s.state.phase === "playerTurn") s = playerAction(s, basicStrategyAction(s.state), r);
   return s;
 }
@@ -79,6 +81,8 @@ describe("table session: complete rounds", () => {
   it("dealer blackjack ends the round at the deal and takes the original bet only", () => {
     let s = session({ top: ["9", "A", "9", "K"] });
     s = dealRound(s, 20, rng);
+    expect(s.state.phase).toBe("insurance");
+    s = insuranceDecision(s, 0, rng);
     expect(s.state.phase).toBe("roundOver");
     expect(s.lastRound).toMatchObject({ net: -20, outcomes: ["lose"] });
     expect(humanBankroll(s)).toBe(980);
@@ -182,6 +186,10 @@ describe("table view (UI projection)", () => {
         }
       };
       check(s.state);
+      if (s.state.phase === "insurance") {
+        s = insuranceDecision(s, 0, r);
+        check(s.state);
+      }
       while (s.state.phase === "playerTurn") {
         s = playerAction(s, basicStrategyAction(s.state), r);
         check(s.state);
@@ -233,12 +241,28 @@ describe("table view (UI projection)", () => {
     expect(v.count.runningCount).toBe(2);
   });
 
-  it("reports the dealer peek only once play continues", () => {
+  it("offers insurance against an Ace and reports the peek only after the decision", () => {
     let s = dealRound(session({ top: ["10", "A", "7", "9", "5"] }), 10, rng);
-    expect(buildTableView(s.state, 4).peekedNoBlackjack).toBe(false);
-    expect(buildTableView(s.state).peekedNoBlackjack).toBe(true);
-    s = dealRound(session({ top: ["10", "A", "7", "K"] }), 10, rng);
-    expect(buildTableView(s.state).peekedNoBlackjack).toBe(false);
-    expect(buildTableView(s.state).dealer.blackjack).toBe(true);
+    const offer = buildTableView(s.state);
+    expect(offer.phase).toBe("insurance");
+    expect(offer.insuranceOffer).toEqual({ max: 5 });
+    expect(offer.peekedNoBlackjack).toBe(false);
+    expect(offer.dealer.cards[1]).toEqual({ faceDown: true });
+    s = insuranceDecision(s, 5, rng);
+    const after = buildTableView(s.state);
+    expect(after.peekedNoBlackjack).toBe(true);
+    expect(after.seats[0].insurance).toEqual({ amount: 5, net: -5 });
+    // Before the peek event is animated, the insurance result and bankroll change stay hidden.
+    const before = buildTableView(s.state, s.state.log.length - 1);
+    expect(before.seats[0].insurance).toEqual({ amount: 5, net: undefined });
+    expect(before.seats[0].bankroll).toBe(1000);
+    expect(after.seats[0].bankroll).toBe(995);
+
+    s = insuranceDecision(dealRound(session({ top: ["10", "A", "7", "K"] }), 10, rng), 5, rng);
+    const bj = buildTableView(s.state);
+    expect(bj.dealer.blackjack).toBe(true);
+    expect(bj.seats[0].insurance).toEqual({ amount: 5, net: 10 });
+    expect(s.lastRound).toMatchObject({ net: 0, insuranceAmount: 5, insuranceNet: 10 });
+    expect(s.stats.insuranceTaken).toBe(1);
   });
 });

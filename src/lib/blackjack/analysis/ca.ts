@@ -17,6 +17,11 @@
  *
  * All EVs are per unit initial bet, conditional on the dealer not having a
  * natural (which is the information the player has when acting).
+ *
+ * Compositions may be fractional (used to model "a shoe at true count t" for
+ * index generation). A rank whose remaining count is ≤ 0 is treated as
+ * exhausted; with fractional counts this truncates rare deep draw paths and
+ * is a small approximation. Integer compositions are unaffected.
  */
 
 import type { PointRank } from "../cards";
@@ -53,6 +58,8 @@ export interface SplitEVs {
   splitNoDAS: number;
 }
 
+export type Composition = Int32Array | Float64Array;
+
 export function fullShoeCounts(decks: number): Int32Array {
   const c = new Int32Array(11);
   for (let r = 1; r <= 9; r++) c[r] = 4 * decks;
@@ -65,7 +72,7 @@ export function fullShoeCounts(decks: number): Int32Array {
  * Mutable internal state is used for speed; the public methods restore it.
  */
 export class UpcardAnalyzer {
-  private readonly rem: Int32Array;
+  private readonly rem: Float64Array;
   private remN: number;
   private readonly hand = new Int32Array(11);
   private handKey = 0;
@@ -81,11 +88,11 @@ export class UpcardAnalyzer {
    *   other known cards, e.g. the second split card).
    */
   constructor(
-    composition: Int32Array,
+    composition: Composition,
     private readonly up: PointRank,
     private readonly h17: boolean,
   ) {
-    this.rem = Int32Array.from(composition);
+    this.rem = Float64Array.from(composition);
     this.remN = this.rem.reduce((a, b) => a + b, 0);
   }
 
@@ -150,7 +157,7 @@ export class UpcardAnalyzer {
       const out = new Float64Array(6);
       for (let r = 1; r <= 10; r++) {
         const c = rem[r];
-        if (c === 0) continue;
+        if (c <= 0) continue;
         const p = c / n;
         rem[r]--;
         const sub = rec(key + POW[r], hard + r, ace || r === 1, n - 1);
@@ -169,7 +176,7 @@ export class UpcardAnalyzer {
     const total = this.handTotal();
     const v = new Float64Array(11);
     for (let h = 1; h <= 10; h++) {
-      if (!this.holeAllowed(h) || this.rem[h] === 0) continue;
+      if (!this.holeAllowed(h) || this.rem[h] <= 0) continue;
       if (total > 21) {
         v[h] = -1;
         continue;
@@ -197,12 +204,12 @@ export class UpcardAnalyzer {
     const n = this.remN;
     for (let r = 1; r <= 10; r++) {
       const c = this.rem[r];
-      if (c === 0) continue;
+      if (c <= 0) continue;
       this.addCard(r);
       const child = this.handTotal() > 21 ? null : next();
       this.removeCard(r);
       for (let h = 1; h <= 10; h++) {
-        if (!this.holeAllowed(h) || this.rem[h] === 0) continue;
+        if (!this.holeAllowed(h) || this.rem[h] <= 0) continue;
         const cr = r === h ? c - 1 : c;
         if (cr <= 0) continue;
         const p = cr / (n - 1);

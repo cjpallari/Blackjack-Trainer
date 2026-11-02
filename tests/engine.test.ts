@@ -8,6 +8,8 @@ import {
   buyIn,
   createGame,
   IllegalActionError,
+  maxInsurance,
+  resolveInsurance,
   runAiTurns,
   startRound,
   visibleCards,
@@ -66,6 +68,9 @@ describe("blackjack and settlement", () => {
   it("dealer peeks: a dealer natural ends the round before players act", () => {
     let g = setup(["10", "A", "9", "K"]);
     g = startRound(g, bets(1), rng);
+    expect(g.phase).toBe("insurance");
+    expect(g.dealer.holeRevealed).toBe(false);
+    g = resolveInsurance(g, {}, rng);
     expect(g.phase).toBe("roundOver");
     expect(g.seats[0].hands[0].outcome).toBe("lose");
     expect(g.seats[0].bankroll).toBe(990);
@@ -73,7 +78,7 @@ describe("blackjack and settlement", () => {
 
   it("player natural vs dealer natural pushes", () => {
     let g = setup(["A", "A", "K", "K"]);
-    g = startRound(g, bets(1), rng);
+    g = resolveInsurance(startRound(g, bets(1), rng), {}, rng);
     expect(g.seats[0].hands[0].outcome).toBe("push");
     expect(g.seats[0].bankroll).toBe(1000);
   });
@@ -117,13 +122,13 @@ describe("dealer soft 17", () => {
   // Player 10,9; dealer A,6; next card 2.
   const top: Rank[] = ["10", "A", "9", "6", "2"];
   it("H17: dealer hits soft 17", () => {
-    let g = startRound(setup(top, { dealerHitsSoft17: true }), bets(1), rng);
+    let g = resolveInsurance(startRound(setup(top, { dealerHitsSoft17: true }), bets(1), rng), {}, rng);
     g = act(g, "stand", rng);
     expect(ranks(g.dealer.cards)).toEqual(["A", "6", "2"]);
     expect(g.seats[0].hands[0].outcome).toBe("push");
   });
   it("S17: dealer stands on soft 17", () => {
-    let g = startRound(setup(top, { dealerHitsSoft17: false }), bets(1), rng);
+    let g = resolveInsurance(startRound(setup(top, { dealerHitsSoft17: false }), bets(1), rng), {}, rng);
     g = act(g, "stand", rng);
     expect(ranks(g.dealer.cards)).toEqual(["A", "6"]);
     expect(g.seats[0].hands[0].outcome).toBe("win");
@@ -243,6 +248,7 @@ describe("shoe progression", () => {
     let rounds = 0;
     while (!g.reshufflePending) {
       g = startRound(g, bets(1), rng);
+      if (g.phase === "insurance") g = resolveInsurance(g, {}, rng);
       while (g.phase === "playerTurn") g = act(g, basicStrategyAction(g), rng);
       rounds++;
       expect(g.shoeNumber).toBe(1);
@@ -340,6 +346,7 @@ describe("integration: many complete rounds", () => {
     const nets = [0, 0, 0];
     for (let round = 0; round < 400; round++) {
       g = startRound(g, bets(3), r);
+      if (g.phase === "insurance") g = resolveInsurance(g, {}, r);
       if (g.shoeNumber !== shoeNumber) {
         shoeNumber = g.shoeNumber;
         shoeSeen = new Set();
@@ -368,5 +375,61 @@ describe("integration: many complete rounds", () => {
     }
     expect(g.roundNumber).toBe(400);
     expect(g.shoeNumber).toBeGreaterThan(1);
+  });
+});
+
+describe("insurance", () => {
+  // P 10, up A, P 9, hole K (dealer blackjack) / hole 7 (no blackjack).
+  it("is offered only against an Ace, before the peek, without revealing the hole card", () => {
+    const g = startRound(setup(["10", "A", "9", "7"]), bets(1, 20), rng);
+    expect(g.phase).toBe("insurance");
+    expect(g.dealer.holeRevealed).toBe(false);
+    expect(availableActions(g)).toEqual([]);
+    expect(maxInsurance(g, 0)).toBe(10);
+    expect(() => act(g, "stand", rng)).toThrow(IllegalActionError);
+    const ten = startRound(setup(["10", "K", "9", "7"]), bets(1), rng);
+    expect(ten.phase).toBe("playerTurn");
+    const noIns = startRound(setup(["10", "A", "9", "7"], { insurance: false }), bets(1), rng);
+    expect(noIns.phase).toBe("playerTurn");
+  });
+
+  it("pays 2:1 when the dealer has blackjack, independently of the main bet", () => {
+    let g = startRound(setup(["10", "A", "9", "K"]), bets(1, 20), rng);
+    g = resolveInsurance(g, { 0: 10 }, rng);
+    expect(g.phase).toBe("roundOver");
+    expect(g.seats[0].insurance).toEqual({ amount: 10, net: 20 });
+    expect(g.seats[0].hands[0]).toMatchObject({ outcome: "lose", net: -20 });
+    expect(g.seats[0].bankroll).toBe(1000); // −20 + 20
+  });
+
+  it("is lost when the dealer has no blackjack, and play continues", () => {
+    let g = startRound(setup(["10", "A", "9", "7"]), bets(1, 20), rng);
+    g = resolveInsurance(g, { 0: 6 }, rng);
+    expect(g.phase).toBe("playerTurn");
+    expect(g.dealer.holeRevealed).toBe(false);
+    expect(g.seats[0].insurance).toEqual({ amount: 6, net: -6 });
+    expect(g.seats[0].bankroll).toBe(994);
+    expect(g.log.at(-1)).toEqual({ type: "peek" });
+    g = act(g, "stand", rng); // 19 vs 18
+    expect(g.seats[0].hands[0].net).toBe(20);
+    expect(g.seats[0].bankroll).toBe(1014);
+  });
+
+  it("accepts at most half the initial bet, limited by uncovered chips", () => {
+    const g = startRound(setup(["10", "A", "9", "7"]), bets(1, 20), rng);
+    expect(() => resolveInsurance(g, { 0: 11 }, rng)).toThrow(IllegalActionError);
+    expect(() => resolveInsurance(g, { 0: -1 }, rng)).toThrow(IllegalActionError);
+    const poor = startRound({ ...setup(["10", "A", "9", "7"]), seats: [{ ...setup([]).seats[0], bankroll: 25 }] }, bets(1, 20), rng);
+    expect(maxInsurance(poor, 0)).toBe(5);
+  });
+
+  it("insuring a blackjack is even money either way", () => {
+    let bj = startRound(setup(["A", "A", "K", "K"]), bets(1, 20), rng);
+    bj = resolveInsurance(bj, { 0: 10 }, rng);
+    expect(bj.seats[0].bankroll).toBe(1020);
+    let no = startRound(setup(["A", "A", "K", "7"]), bets(1, 20), rng);
+    no = resolveInsurance(no, { 0: 10 }, rng);
+    expect(no.phase).toBe("roundOver");
+    expect(no.seats[0].bankroll).toBe(1020); // +30 − 10
   });
 });

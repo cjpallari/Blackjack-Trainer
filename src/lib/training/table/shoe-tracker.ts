@@ -6,7 +6,7 @@ import type { TableRules } from "../../blackjack/rules";
 import type { PlayerAction } from "../../blackjack/strategy";
 import { describeRules } from "../../blackjack/rules";
 import type { CheckpointActual, CheckpointAnswer, CheckpointGrade, CheckpointTrigger } from "./count-checks";
-import type { DecisionRecord } from "./decisions";
+import type { DecisionRecord, InsuranceRecord } from "./decisions";
 import type { TrainingMode } from "./modes";
 
 /** Count state after a completed round, when every card dealt so far has been seen. */
@@ -48,11 +48,16 @@ export interface ShoeTracker {
   readonly snapshots: readonly CountSnapshot[];
   readonly checkpoints: readonly CheckpointRecord[];
   readonly decisions: readonly DecisionRecord[];
+  readonly insurance: readonly (InsuranceRecord & { readonly net: number })[];
   /** False once the engine flags the count invalid (mid-round exhaustion). */
   readonly countValid: boolean;
+  /** Index set used for deviation grading, or why there is none. */
+  readonly deviationSet: DeviationSetInfo;
 }
 
-export function createTracker(shoeNumber: number, rules: TableRules, mode: TrainingMode, at: number): ShoeTracker {
+export type DeviationSetInfo = { readonly id: string } | { readonly unavailable: string };
+
+export function createTracker(shoeNumber: number, rules: TableRules, mode: TrainingMode, at: number, deviationSet: DeviationSetInfo = { unavailable: "Deviation grading is off." }): ShoeTracker {
   const totalCards = rules.decks * 52;
   return {
     shoeNumber,
@@ -64,8 +69,14 @@ export function createTracker(shoeNumber: number, rules: TableRules, mode: Train
     snapshots: [{ round: 0, cardsDealt: 0, cardsRemaining: totalCards, runningCount: 0, trueCount: 0 }],
     checkpoints: [],
     decisions: [],
+    insurance: [],
     countValid: true,
+    deviationSet,
   };
+}
+
+export function recordInsurance(t: ShoeTracker, r: InsuranceRecord & { net: number }): ShoeTracker {
+  return { ...t, insurance: [...t.insurance, r] };
 }
 
 export function noteMode(t: ShoeTracker, mode: TrainingMode): ShoeTracker {
@@ -101,8 +112,32 @@ export interface MissSummary {
   readonly best: PlayerAction;
 }
 
+export interface CellDeviationStats {
+  readonly cellId: string;
+  readonly label: string;
+  readonly decisions: number;
+  readonly correct: number;
+  readonly opportunities: number;
+  readonly followed: number;
+  readonly missed: number;
+  readonly wrong: number;
+}
+
+export interface DeviationReport {
+  readonly indexSetId: string;
+  /** Decisions where the count called for a deviation. */
+  readonly opportunities: number;
+  readonly followed: number;
+  readonly missed: number;
+  /** Index plays made when the count did not call for them. */
+  readonly wrongDeviations: number;
+  /** Decisions where the deck-estimate tolerance straddled the index (both plays accepted). */
+  readonly borderline: number;
+  readonly byCell: readonly CellDeviationStats[];
+}
+
 export interface ShoeReport {
-  readonly version: 1;
+  readonly version: 2;
   readonly id: string;
   readonly startedAt: number;
   readonly endedAt: number;
@@ -140,10 +175,24 @@ export interface ShoeReport {
     /** Graded decisions that relied on an approximation (multi-card, post-split, split EV). */
     readonly approximate: number;
     readonly accuracy: number | null;
-    /** Sum of estimated EV lost, in units of the affected hands' bets. */
+    /** Sum of estimated EV lost from basic-strategy mistakes (index plays excluded), in units of the hands' bets. */
     readonly estimatedEvLost: number;
     readonly topMisses: readonly MissSummary[];
+    /** "count-adjusted" when deviations were graded: a correct index play is not a mistake. */
+    readonly grading: "basic" | "count-adjusted";
+    /** Decisions that matched basic strategy exactly. */
+    readonly basicMatches: number;
   };
+  /** Count-based play results; null when no index set was active (see deviationsNote). */
+  readonly deviations: DeviationReport | null;
+  readonly deviationsNote: string | null;
+  readonly insurance: {
+    readonly offered: number;
+    readonly taken: number;
+    readonly staked: number;
+    readonly net: number;
+    readonly correct: number;
+  } | null;
   readonly shoe: {
     readonly rounds: number;
     readonly cardsDealt: number;
@@ -182,12 +231,15 @@ export function buildShoeReport(
   const final = [...cps].reverse().find((c) => c.trigger === "end-of-shoe");
 
   const graded = t.decisions.filter((d) => d.correct !== null);
-  const wrong = graded.filter((d) => d.correct === false);
+  const deviationsOn = "id" in t.deviationSet;
+  const isCorrect = (d: DecisionRecord) => (d.countCorrect ?? d.correct) === true;
+  const wrong = graded.filter((d) => !isCorrect(d));
   const misses = new Map<string, MissSummary>();
   for (const d of wrong) {
     const k = d.key!;
     const prev = misses.get(k);
-    misses.set(k, { key: k, count: (prev?.count ?? 0) + 1, chosen: d.chosen, best: d.best! });
+    const best = (d.deviation?.countAction ?? d.best!) as PlayerAction;
+    misses.set(k, { key: k, count: (prev?.count ?? 0) + 1, chosen: d.chosen, best });
   }
 
   const last = t.snapshots[t.snapshots.length - 1];
@@ -195,7 +247,7 @@ export function buildShoeReport(
   const valid = t.countValid && end.termination !== "exhausted";
 
   return {
-    version: 1,
+    version: 2,
     id: `${t.startedAt.toString(36)}-${t.shoeNumber}`,
     startedAt: t.startedAt,
     endedAt: end.at,
@@ -234,7 +286,20 @@ export function buildShoeReport(
       accuracy: graded.length ? (graded.length - wrong.length) / graded.length : null,
       estimatedEvLost: graded.reduce((n, d) => n + (d.evLoss ?? 0), 0),
       topMisses: [...misses.values()].sort((a, b) => b.count - a.count).slice(0, 5),
+      grading: deviationsOn ? "count-adjusted" : "basic",
+      basicMatches: graded.filter((d) => d.correct === true).length,
     },
+    deviations: deviationsOn ? deviationReport(t, (t.deviationSet as { id: string }).id) : null,
+    deviationsNote: "unavailable" in t.deviationSet ? t.deviationSet.unavailable : null,
+    insurance: t.insurance.length
+      ? {
+          offered: t.insurance.length,
+          taken: t.insurance.filter((i) => i.amount > 0).length,
+          staked: t.insurance.reduce((n, i) => n + i.amount, 0),
+          net: t.insurance.reduce((n, i) => n + i.net, 0),
+          correct: t.insurance.filter((i) => i.countCorrect).length,
+        }
+      : null,
     shoe: {
       rounds: t.rounds,
       cardsDealt: last.cardsDealt,
@@ -254,5 +319,49 @@ export function buildShoeReport(
       estimatedTc: c.grade.tcAsked && c.answer.trueCount !== undefined ? (c.answer.trueCount ?? null) : null,
     })),
     ...(end.keepDecisions ? { decisions: t.decisions } : {}),
+  };
+}
+
+function deviationReport(t: ShoeTracker, indexSetId: string): DeviationReport {
+  const grades = [
+    ...t.decisions.flatMap((d) => (d.deviation ? [d.deviation] : [])),
+    ...t.insurance.flatMap((i) => (i.deviation ? [i.deviation] : [])),
+  ];
+  const byCell = new Map<string, { -readonly [K in keyof CellDeviationStats]: CellDeviationStats[K] }>();
+  for (const g of grades) {
+    const c = byCell.get(g.cellId) ?? { cellId: g.cellId, label: g.label, decisions: 0, correct: 0, opportunities: 0, followed: 0, missed: 0, wrong: 0 };
+    c.decisions++;
+    if (g.acceptable.includes(g.chosen)) c.correct++;
+    if (g.deviates) c.opportunities++;
+    if (g.outcome === "followed") c.followed++;
+    if (g.outcome === "missed") c.missed++;
+    if (g.outcome === "wrong-deviation") c.wrong++;
+    byCell.set(g.cellId, c);
+  }
+  return {
+    indexSetId,
+    opportunities: grades.filter((g) => g.deviates).length,
+    followed: grades.filter((g) => g.outcome === "followed").length,
+    missed: grades.filter((g) => g.outcome === "missed").length,
+    wrongDeviations: grades.filter((g) => g.outcome === "wrong-deviation").length,
+    borderline: grades.filter((g) => g.borderline).length,
+    byCell: [...byCell.values()].sort((a, b) => b.missed + b.wrong - (a.missed + a.wrong) || b.decisions - a.decisions),
+  };
+}
+
+/** Upgrade a saved version-1 report (before deviations and insurance) to version 2. */
+export function migrateReport(r: unknown): ShoeReport | null {
+  if (!r || typeof r !== "object") return null;
+  const x = r as { version?: number; strategy?: Record<string, unknown> };
+  if (x.version === 2) return r as ShoeReport;
+  if (x.version !== 1 || !x.strategy) return null;
+  const v1 = r as Omit<ShoeReport, "version" | "deviations" | "deviationsNote" | "insurance" | "strategy"> & { strategy: Omit<ShoeReport["strategy"], "grading" | "basicMatches"> };
+  return {
+    ...v1,
+    version: 2,
+    strategy: { ...v1.strategy, grading: "basic", basicMatches: v1.strategy.correct },
+    deviations: null,
+    deviationsNote: "Recorded before deviation grading existed.",
+    insurance: null,
   };
 }

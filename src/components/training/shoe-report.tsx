@@ -14,7 +14,6 @@ import { cn } from "@/lib/utils";
 const ACTUAL = "#3987e5";
 const PLAYER = "#d95926";
 
-const ratio = (a: number, b: number) => (b ? a / b : null);
 const fmt1 = (n: number | null) => (n === null ? "—" : n.toFixed(1));
 const signed1 = (n: number | null) => (n === null ? "—" : `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n).toFixed(1)}`);
 
@@ -57,9 +56,13 @@ export function ShoeReportView({ report: r }: { report: ShoeReport }) {
       <section className="space-y-2">
         <h3 className="text-sm font-semibold">Strategy</h3>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <StatTile label="Accuracy" value={pct(s.accuracy, 1)} sub={`${s.correct}/${s.graded} graded decisions`} />
-          <StatTile label="Mistakes" value={s.incorrect} sub={s.ungraded ? `${s.ungraded} not graded` : " "} />
-          <StatTile label="Est. EV lost" value={`${(s.estimatedEvLost * 100).toFixed(1)}%`} sub="of one bet, summed" />
+          <StatTile
+            label={s.grading === "count-adjusted" ? "Count-adjusted accuracy" : "Accuracy"}
+            value={pct(s.accuracy, 1)}
+            sub={`${s.correct}/${s.graded} graded decisions`}
+          />
+          <StatTile label="Mistakes" value={s.incorrect} sub={s.ungraded ? `${s.ungraded} not graded` : `${s.basicMatches} matched basic strategy`} />
+          <StatTile label="Est. EV lost" value={`${(s.estimatedEvLost * 100).toFixed(1)}%`} sub="basic-strategy mistakes only" />
           <StatTile label="Approximate grades" value={s.approximate} sub="multi-card / split hands" />
         </div>
         {s.topMisses.length > 0 && (
@@ -91,8 +94,61 @@ export function ShoeReportView({ report: r }: { report: ShoeReport }) {
         )}
         <p className="text-[11px] text-muted-foreground">
           EV losses are estimates from the basic-strategy tables. Multi-card hands, hands after a split, and split decisions are graded with
-          approximations.
+          approximations. Index plays are graded right or wrong only: the EV gained or lost by a deviation at a given count is not calculated.
         </p>
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold">Count-based deviations</h3>
+        {r.deviations ? (
+          <>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <StatTile label="Opportunities" value={r.deviations.opportunities} sub="count called for a deviation" />
+              <StatTile label="Made" value={r.deviations.followed} sub={r.deviations.opportunities ? pct(r.deviations.followed / r.deviations.opportunities) : " "} />
+              <StatTile label="Missed" value={r.deviations.missed} sub="played basic instead" />
+              <StatTile label="Not due" value={r.deviations.wrongDeviations} sub="index play made too early" />
+            </div>
+            {r.deviations.byCell.length > 0 && (
+              <table className="tabular w-full max-w-lg text-left text-xs">
+                <thead className="text-muted-foreground">
+                  <tr>
+                    <th className="py-1 font-medium">Index</th>
+                    <th className="py-1 font-medium">Correct</th>
+                    <th className="py-1 font-medium">Due</th>
+                    <th className="py-1 font-medium">Missed</th>
+                    <th className="py-1 font-medium">Not due</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.deviations.byCell.map((c) => (
+                    <tr key={c.cellId} className="border-t border-border">
+                      <td className="py-1">{c.label}</td>
+                      <td className="py-1">
+                        {c.correct}/{c.decisions}
+                      </td>
+                      <td className="py-1">{c.opportunities}</td>
+                      <td className={cn("py-1", c.missed && "text-destructive")}>{c.missed}</td>
+                      <td className={cn("py-1", c.wrong && "text-destructive")}>{c.wrong}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              Graded with {r.deviations.indexSetId} using your visible running count and a quarter-deck estimate of the undealt cards
+              {r.deviations.borderline ? `; ${r.deviations.borderline} borderline decision(s) accepted either way` : ""}.
+            </p>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">Not graded. {r.deviationsNote}</p>
+        )}
+        {r.insurance && (
+          <p className="tabular text-xs text-muted-foreground">
+            Insurance: offered {r.insurance.offered} · taken {r.insurance.taken} · {r.insurance.correct}/{r.insurance.offered} correct decisions · net{" "}
+            {r.insurance.net > 0 ? "+" : ""}
+            {r.insurance.net} (settled separately from hands)
+          </p>
+        )}
       </section>
 
       <section className="space-y-2">
@@ -254,7 +310,8 @@ export function CountChart({ report: r }: { report: ShoeReport }) {
       <p className="text-[11px] text-muted-foreground">
         The blue line is the engine&apos;s exact count. Orange dots are the answers you gave at checkpoints; nothing is assumed about your count
         between them. Checks taken mid-round are plotted at that moment&apos;s card total.
-        {ratio(dots.length, r.estimates.length) === 0 && r.estimates.length > 0 ? " You skipped every check this shoe." : ""}
+        {r.estimates.length > 0 && r.estimates.every((e) => e.estimatedRc === null) ? " You skipped every check this shoe." : ""}
+        {metric === "tc" && dots.length === 0 && r.estimates.some((e) => e.estimatedRc !== null) ? " No true-count answers were given; switch to Running count to see your answers." : ""}
       </p>
     </div>
   );

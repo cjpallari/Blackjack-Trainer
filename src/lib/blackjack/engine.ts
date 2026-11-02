@@ -12,7 +12,8 @@ import { canDoubleTotal, naturalPayout, type TableRules } from "./rules";
 import { cardsRemaining, createShoe, cutCardReached, type Shoe } from "./shoe";
 import { evaluateDecision, strategyTableFor, type PlayerAction } from "./strategy";
 
-export type Phase = "betting" | "playerTurn" | "roundOver";
+/** "insurance": the dealer shows an Ace and seats are deciding on insurance before the peek. */
+export type Phase = "betting" | "insurance" | "playerTurn" | "roundOver";
 
 export type HandOutcome = "blackjack" | "win" | "push" | "lose" | "bust" | "surrender";
 
@@ -37,6 +38,14 @@ export interface Seat {
   readonly name: string;
   readonly hands: readonly PlayerHand[];
   readonly bankroll: number;
+  /** Insurance taken this round (null if none offered or declined). */
+  readonly insurance: InsuranceBet | null;
+}
+
+export interface InsuranceBet {
+  readonly amount: number;
+  /** +2×amount if the dealer had blackjack, −amount otherwise; set at the peek. */
+  readonly net: number;
 }
 
 export interface DealerState {
@@ -54,6 +63,9 @@ export type GameEvent =
   | { readonly type: "reveal"; readonly card: Card }
   | { readonly type: "action"; readonly seat: number; readonly hand: number; readonly action: PlayerAction }
   | { readonly type: "bet"; readonly seat: number; readonly amount: number }
+  | { readonly type: "insurance"; readonly seat: number; readonly amount: number }
+  /** The dealer checked the hole card and does not have blackjack. */
+  | { readonly type: "peek" }
   | { readonly type: "shuffle"; readonly reason: ShuffleReason };
 
 /**
@@ -216,7 +228,7 @@ export function createGame(rules: TableRules, seats: readonly SeatConfig[], rng:
     rules,
     shoe: createShoe(rules.decks, rng, rules.penetration),
     phase: "betting",
-    seats: seats.map((s, i) => ({ id: i, kind: s.kind, name: s.name, bankroll: s.bankroll, hands: [] })),
+    seats: seats.map((s, i) => ({ id: i, kind: s.kind, name: s.name, bankroll: s.bankroll, hands: [], insurance: null })),
     dealer: { cards: [], holeRevealed: false },
     turn: null,
     roundNumber: 0,
@@ -236,7 +248,7 @@ export function createGame(rules: TableRules, seats: readonly SeatConfig[], rng:
  * @param bets bet per seat id; seats without a positive bet sit out.
  */
 export function startRound(state: GameState, bets: Readonly<Record<number, number>>, rng: Rng): GameState {
-  if (state.phase === "playerTurn") throw new IllegalActionError("A round is already in progress.");
+  if (state.phase === "playerTurn" || state.phase === "insurance") throw new IllegalActionError("A round is already in progress.");
   const d = toDraft(state);
   const { minBet, maxBet } = d.rules;
   for (const seat of d.seats) {
@@ -261,6 +273,7 @@ export function startRound(state: GameState, bets: Readonly<Record<number, numbe
   for (const seat of d.seats) {
     const bet = bets[seat.id] ?? 0;
     seat.hands = bet > 0 ? [newHand(bet, false, false)] : [];
+    seat.insurance = null;
   }
 
   for (let round = 0; round < 2; round++) {
@@ -268,25 +281,72 @@ export function startRound(state: GameState, bets: Readonly<Record<number, numbe
     dealToDealer(d, round === 1, rng);
   }
 
-  const dealerBJ = isBlackjack(d.dealer.cards);
-  const up = pointRank(d.dealer.cards[0].rank);
-  if (dealerBJ && (up === 1 || up === 10)) {
-    // Dealer peeks and has a natural: round ends immediately.
-    revealHole(d);
-    for (const seat of playing) seat.hands[0].done = true;
-    settle(d);
-    return finishRound(d);
-  }
-
   for (const seat of playing) {
     const h = seat.hands[0];
     if (isBlackjack(h.cards)) h.done = true;
   }
 
+  const up = pointRank(d.dealer.cards[0].rank);
+  if (up === 1 && d.rules.insurance) {
+    // Insurance is offered before the dealer checks the hole card.
+    d.phase = "insurance";
+    d.turn = null;
+    return d as GameState;
+  }
+  return peekAndContinue(d, rng);
+}
+
+/** Dealer checks for a natural with an Ace or ten up; ends the round on blackjack, else play begins. */
+function peekAndContinue(d: Draft, rng: Rng): GameState {
+  const up = pointRank(d.dealer.cards[0].rank);
+  const peeks = up === 1 || up === 10;
+  const dealerBJ = isBlackjack(d.dealer.cards);
+  for (const seat of d.seats) {
+    if (!seat.insurance) continue;
+    const net = dealerBJ ? 2 * seat.insurance.amount : -seat.insurance.amount;
+    seat.insurance = { ...seat.insurance, net };
+    seat.bankroll += net;
+  }
+  if (peeks && dealerBJ) {
+    revealHole(d);
+    for (const seat of d.seats) for (const h of seat.hands) h.done = true;
+    settle(d);
+    return finishRound(d);
+  }
+  if (peeks) d.log.push({ type: "peek" });
   d.phase = "playerTurn";
   d.turn = null;
   advanceTurn(d, rng);
   return d as GameState;
+}
+
+/** Largest insurance a seat may take: half its initial bet, limited by uncommitted chips. */
+export function maxInsurance(state: GameState, seatId: number): number {
+  const seat = state.seats[seatId];
+  const hand = seat.hands[0];
+  if (state.phase !== "insurance" || !hand) return 0;
+  return Math.max(0, Math.min(hand.bet / 2, seat.bankroll - hand.bet));
+}
+
+/**
+ * Record every seat's insurance decision (amount 0 = decline), then the
+ * dealer peeks. Insurance is settled independently of the main bets:
+ * 2:1 if the dealer has blackjack, lost otherwise.
+ */
+export function resolveInsurance(state: GameState, amounts: Readonly<Record<number, number>>, rng: Rng): GameState {
+  if (state.phase !== "insurance") throw new IllegalActionError("Insurance is not being offered.");
+  const d = toDraft(state);
+  for (const seat of d.seats) {
+    if (seat.hands.length === 0) continue;
+    const amount = amounts[seat.id] ?? 0;
+    const max = maxInsurance(state, seat.id);
+    if (!(amount >= 0) || amount > max + 1e-9) throw new IllegalActionError(`Insurance for ${seat.name} must be between 0 and ${max}.`);
+    if (amount > 0) {
+      seat.insurance = { amount, net: 0 };
+      d.log.push({ type: "insurance", seat: seat.id, amount });
+    }
+  }
+  return peekAndContinue(d, rng);
 }
 
 /**
@@ -328,7 +388,7 @@ export function availableActions(state: GameState): PlayerAction[] {
 
 /** Add chips to a seat between rounds (a buy-in). */
 export function buyIn(state: GameState, seatId: number, amount: number): GameState {
-  if (state.phase === "playerTurn") throw new IllegalActionError("Cannot buy in during a round.");
+  if (state.phase === "playerTurn" || state.phase === "insurance") throw new IllegalActionError("Cannot buy in during a round.");
   if (!(amount > 0)) throw new IllegalActionError("Buy-in must be positive.");
   return { ...state, seats: state.seats.map((s) => (s.id === seatId ? { ...s, bankroll: s.bankroll + amount } : s)) };
 }

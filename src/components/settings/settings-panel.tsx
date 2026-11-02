@@ -98,6 +98,9 @@ export function SettingsPanel() {
               ]}
             />
           </Field>
+          <Field label="Insurance against an Ace">
+            <Segmented value={rules.insurance ? 1 : 0} onChange={(v) => setRules({ insurance: v === 1 })} options={yesNo} />
+          </Field>
           <Field label="Maximum hands after splitting">
             <Segmented value={rules.maxSplitHands} onChange={(maxSplitHands) => setRules({ maxSplitHands })} options={[2, 3, 4].map((n) => ({ value: n as 2 | 3 | 4, label: n }))} />
           </Field>
@@ -132,8 +135,8 @@ export function SettingsPanel() {
 
         <div className="mt-5 space-y-1 border-t border-border pt-4 text-xs leading-relaxed text-muted-foreground">
           <p>
-            Assumed for every ruleset: US hole card with dealer peek (no ENHC), late surrender only, a split 21 is not a blackjack, and no insurance
-            prompt. Basic strategy is recomputed for the deck count and soft-17 rule, and applied with your DAS, doubling and surrender settings.
+            Assumed for every ruleset: US hole card with dealer peek (no ENHC), late surrender only, a split 21 is not a blackjack, and insurance
+            (when enabled) is offered only against an Ace. Basic strategy is recomputed for the deck count and soft-17 rule, and applied with your DAS, doubling and surrender settings.
           </p>
           <p>
             Non-standard games (such as Blackjack Elite at El Dorado Hills) are not available. They can be added as a rules variant once their official

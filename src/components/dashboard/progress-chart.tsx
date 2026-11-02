@@ -4,16 +4,17 @@ import { useState } from "react";
 import type { DayBucket, Tally } from "@/lib/training/stats";
 import { cn } from "@/lib/utils";
 
-/** Validated categorical slots (dark surface): blue, orange, aqua. */
+/** Validated categorical slots (dark surface): blue, orange, aqua, yellow. */
 const SERIES = [
   { key: "bs", label: "Basic strategy", color: "#3987e5" },
   { key: "rc", label: "Running count", color: "#d95926" },
   { key: "tc", label: "True count", color: "#199e70" },
+  { key: "dev", label: "Deviations", color: "#c98500" },
 ] as const;
 
 type Key = (typeof SERIES)[number]["key"];
 
-const acc = (t: Tally) => (t.attempts ? t.correct / t.attempts : null);
+const acc = (t: Tally | undefined) => (t?.attempts ? t.correct / t.attempts : null);
 
 export function ProgressChart({ history }: { history: DayBucket[] }) {
   const days = history.slice(-30);
@@ -179,8 +180,8 @@ export function ProgressChart({ history }: { history: DayBucket[] }) {
   );
 }
 
-function cell(t: Tally): string {
-  return t.attempts ? `${Math.round((t.correct / t.attempts) * 100)}% (${t.attempts})` : "—";
+function cell(t: Tally | undefined): string {
+  return t?.attempts ? `${Math.round((t.correct / t.attempts) * 100)}% (${t.attempts})` : "—";
 }
 
 function short(date: string): string {

@@ -6,11 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, Kbd, Segmented } from "@/components/training/controls";
 import { formatCount, ROUNDING_LABELS, type TrueCountRounding } from "@/lib/blackjack/counting";
-import type { StrategyAdvice } from "@/lib/blackjack/strategy";
+import { actionWord, formatTc } from "@/lib/blackjack/deviations/registry";
 import type { TableTrainingSettings } from "@/lib/storage/stores";
 import { ACTION_LABEL } from "@/lib/training/explain";
 import type { CheckpointActual, CheckpointAnswer } from "@/lib/training/table/count-checks";
-import type { DecisionRecord } from "@/lib/training/table/decisions";
+import type { DecisionRecord, InsuranceRecord, TableHint } from "@/lib/training/table/decisions";
 import { MODE_LABELS, type TrainingMode } from "@/lib/training/table/modes";
 import type { CheckpointRecord } from "@/lib/training/table/shoe-tracker";
 import type { PendingCheck } from "@/lib/training/table/training-table";
@@ -46,11 +46,65 @@ export function CountHud({ hud }: { hud: CheckpointActual }) {
   );
 }
 
-export function HintChip({ hint }: { hint: StrategyAdvice }) {
+const cap = (w: string) => w[0].toUpperCase() + w.slice(1);
+
+/** Basic strategy and, for index plays, the count-adjusted play shown separately. */
+export function HintChip({ hint }: { hint: TableHint }) {
+  const basic = hint.insurance ? "No insurance" : hint.basic!.acceptable.map((a) => ACTION_LABEL[a]).join(" or ");
+  const d = hint.deviation;
   return (
-    <span className="rounded-full bg-primary/15 px-3 py-1 text-xs font-medium text-primary">
-      Basic strategy: {hint.acceptable.map((a) => ACTION_LABEL[a]).join(" or ")}
-    </span>
+    <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
+      <span className="rounded-full bg-primary/15 px-3 py-1 font-medium text-primary">Basic strategy: {basic}</span>
+      {d && (
+        <span className={cn("rounded-full px-3 py-1 font-medium", d.deviates ? "bg-sky-500/20 text-sky-200" : "bg-muted text-muted-foreground")}>
+          Count-adjusted (TC {formatTc(d.trueCount)}): {cap(actionWord(d.countAction))}
+          {d.borderline ? " (borderline)" : ""}
+        </span>
+      )}
+      {d && <span className="w-full text-center text-[11px] text-muted-foreground">{d.label}: {d.indexText}{d.deviates ? " The count has crossed the index." : ""}</span>}
+    </div>
+  );
+}
+
+export function InsurancePanel({ max, onDecide }: { max: number; onDecide: (amount: number) => void }) {
+  const [amount, setAmount] = useState(max);
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-2">
+      <span className="text-sm font-medium">Dealer shows an Ace. Insurance?</span>
+      <Button variant="secondary" size="lg" className="h-11 gap-2" onClick={() => onDecide(0)}>
+        No insurance <Kbd>N</Kbd>
+      </Button>
+      {max > 0 && (
+        <>
+          <Input
+            aria-label="Insurance amount"
+            type="number"
+            min={0}
+            max={max}
+            step={0.5}
+            value={amount}
+            onChange={(e) => setAmount(Math.max(0, Math.min(max, Number(e.target.value) || 0)))}
+            className="tabular h-11 w-24 text-center"
+          />
+          <Button size="lg" className="h-11 gap-2" disabled={amount <= 0} onClick={() => onDecide(amount)}>
+            Insure {amount} <Kbd>I</Kbd>
+          </Button>
+        </>
+      )}
+      <span className="w-full text-center text-[11px] text-muted-foreground">Pays 2:1 if the dealer has blackjack; up to half your bet ({max}).</span>
+    </div>
+  );
+}
+
+export function InsuranceFeedback({ r }: { r: InsuranceRecord }) {
+  const d = r.deviation;
+  const ok = r.countCorrect;
+  const what = r.chosen === "insure" ? `took insurance (${r.amount})` : "declined insurance";
+  return (
+    <p className={cn("text-center text-xs", ok ? "text-success" : "text-destructive")}>
+      {ok ? "✓" : "✗"} You {what}.{" "}
+      {d ? `At TC ${formatTc(d.trueCount)} the count-adjusted play is to ${actionWord(d.countAction)} (${d.indexText})` : "Basic strategy declines insurance."}
+    </p>
   );
 }
 
@@ -186,6 +240,25 @@ export function CheckpointFeedback({ cp }: { cp: CheckpointRecord }) {
 export function DecisionFeedback({ d }: { d: DecisionRecord }) {
   if (d.correct === null)
     return <p className="text-center text-xs text-muted-foreground">{ACTION_LABEL[d.chosen]}: not graded. {d.notes[0]}</p>;
+  const dev = d.deviation;
+  if (dev) {
+    const ok = d.countCorrect;
+    const msg =
+      dev.outcome === "followed"
+        ? `deviation made: at TC ${formatTc(dev.trueCount)}, ${actionWord(dev.countAction)} instead of basic ${actionWord(dev.basic)}.`
+        : dev.outcome === "missed"
+          ? `missed deviation: at TC ${formatTc(dev.trueCount)} the count calls for ${actionWord(dev.countAction)} (basic is ${actionWord(dev.basic)}).`
+          : dev.outcome === "wrong-deviation"
+            ? `deviation not due: at TC ${formatTc(dev.trueCount)} basic strategy (${actionWord(dev.basic)}) still applies.`
+            : ok
+              ? `matches the count-adjusted play at TC ${formatTc(dev.trueCount)}.`
+              : `the count-adjusted play at TC ${formatTc(dev.trueCount)} is ${actionWord(dev.countAction)}.`;
+    return (
+      <p className={cn("text-center text-xs", ok ? "text-success" : "text-destructive")}>
+        {ok ? "✓" : "✗"} {ACTION_LABEL[d.chosen]}: {msg} <span className="text-muted-foreground">{dev.label}: {dev.indexText}</span>
+      </p>
+    );
+  }
   return (
     <p className={cn("text-center text-xs", d.correct ? "text-success" : "text-destructive")}>
       {d.correct ? (
@@ -254,6 +327,7 @@ export function TrainingSettingsPanel({
           cp.endOfShoe || value.mode === "casino",
           (endOfShoe) => setCp({ endOfShoe }),
         )}
+        {toggle("Grade count-based deviations (index plays)", value.deviations, (deviations) => onChange({ deviations }))}
         {toggle("Save full decision log with shoe reports", value.keepDecisionDetail, (keepDecisionDetail) => onChange({ keepDecisionDetail }), "Uses more browser storage; kept for the 20 most recent shoes.")}
       </div>
     </div>

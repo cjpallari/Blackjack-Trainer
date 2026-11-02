@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ProgressChart } from "@/components/dashboard/progress-chart";
 import { ShoeHistorySection } from "@/components/dashboard/shoe-history";
+import { DeviationAnalytics } from "@/components/dashboard/deviation-analytics";
 import { StatTile, formatMs, pct } from "@/components/training/controls";
 import { useStats } from "@/hooks/use-store";
 import { parseScenarioKey } from "@/lib/training/basic-strategy";
@@ -17,7 +18,7 @@ export function Dashboard() {
   const rcAll = sum(rc.drills, rc.flashcards);
   const tcAll = sum(tc.calculate, tc.estimateOverall);
   const missed = missedScenarios(stats).slice(0, 10);
-  const sessions = stats.sessions.bs + stats.sessions.rc + stats.sessions.tc + stats.sessions.sim;
+  const sessions = stats.sessions.bs + stats.sessions.rc + stats.sessions.tc + stats.sessions.sim + stats.sessions.dev;
   const avgMs = bs.overall.attempts ? bs.totalMs / bs.overall.attempts : null;
 
   return (
@@ -42,11 +43,13 @@ export function Dashboard() {
           <StatTile label="Best deck" value={rc.bestDeckMs ? formatMs(rc.bestDeckMs) : "—"} sub="correct countdowns only" />
           <StatTile label="True count" value={pct(accuracy(tcAll))} sub={`${tcAll.attempts} answers`} />
           <StatTile label="Deck estimation" value={pct(accuracy(tc.deckEstimate))} sub={`${tc.deckEstimate.attempts} estimates`} />
-          <StatTile label="Sessions" value={sessions} sub={`BS ${stats.sessions.bs} · RC ${stats.sessions.rc} · TC ${stats.sessions.tc} · Table ${stats.sessions.sim}`} />
+          <StatTile label="Sessions" value={sessions} sub={`BS ${stats.sessions.bs} · RC ${stats.sessions.rc} · TC ${stats.sessions.tc} · Table ${stats.sessions.sim} · Dev ${stats.sessions.dev}`} />
         </div>
       </section>
 
       <ShoeHistorySection />
+
+      <DeviationAnalytics />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <section className="rounded-xl border border-border bg-card p-4">

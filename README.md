@@ -78,11 +78,63 @@ Shoe handling:
   - History keeps at most 200 shoes, and full decision logs only for the latest 20.
   - Interrupted (count-invalid) shoes are excluded from counting aggregates.
 
+## Count-based deviations (Hi-Lo)
+
+### Math audit
+
+`tests/deviations.test.ts` checks the analyzer against Wizard of Odds' published composition-dependent EV tables (Appendix 9, dealer peeks):
+
+- **Stand, hit and double EVs** for 2-deck H17 and 6-deck S17 match to 6 decimal places. That validates dealer peek, H17/S17, card removal and doubling.
+- **Splits** don't model resplitting. This understates split EV: 8,8 v 10 is about 0.006–0.007 low, and the overall house edge is about 0.03–0.05% worse than published.
+- **The published 10,10 split column forces resplitting**, so it isn't comparable. A test checks our value against an independent single-split formula instead.
+
+### How indices are computed
+
+`npm run generate:indices` (about 2 minutes) writes `deviations/data/hilo-indices.json`.
+
+- **Shoe model:** the remaining shoe at true count *t* is *D* decks, with the running count spread over the Hi-Lo ranks in proportion. Exactly *D* decks remain, so decks remaining are exact.
+- **Evaluation:** every competing play is evaluated exactly at integer true counts −10…+10, at about 60% and about 30% of the shoe left.
+- **Scope:** two-card hands only.
+- **Stability rule:** an index is used only if its crossing moves by at most 1 true count between the two depths. Otherwise it is disabled as unstable, with the reason shown.
+- **Cross-check:** generated values are compared with the published six-deck I18 / Fab 4. Of 22 published values, 21 are within ±1 and 13 match exactly. The exception is the two-card **16 v 10** stand index, at about +2 against a published 0. It is disabled where it's unstable (all no-surrender games and all 2- and 4-deck games).
+- **True-count convention:** the true count is the user's rounding setting applied to (visible running count ÷ quarter-deck estimate of undealt cards). Each integer TC stands for a band of raw counts, and the play for that integer is the play at the band's middle (`bucketRepresentative`). The Deviation Trainer and the table use the same `evaluateDeviation`.
+- **Deck-estimate tolerance at the table:** a play consistent with any deck estimate within ±¼ deck (1–2 decks) or ±½ deck (more decks) is accepted and marked borderline.
+- **Hand coverage at the table:** only two-card, unsplit hands, 10,10 pairs and insurance are graded for deviations.
+
+### Supported rulesets
+
+Every supported ruleset has its own computed index set; six-deck numbers are never reused for other deck counts. Totals are I18 plays, plus Fab 4 when surrender is offered. Double-after-split only changes the 10,10 values. Plays also drop out when double restrictions forbid them or insurance is off.
+
+| Decks | Soft 17 | Surrender | Active | Disabled (unstable across depths) |
+|---|---|---|---|---|
+| 2 | S17 | none | 12/18 | 16 v 10, 11 v A, 9 v 2, 10 v A, 9 v 7, 16 v 9 |
+| 2 | S17 | late | 15/21 | 16 v 10, 11 v A, 9 v 2, 10 v A, 9 v 7, 16 v 9 |
+| 2 | H17 | none | 13/18 | 16 v 10, 11 v A, 9 v 2, 9 v 7, 16 v 9 |
+| 2 | H17 | late | 16/21 | 16 v 10, 11 v A, 9 v 2, 9 v 7, 16 v 9 |
+| 4 | S17/H17 | none | 14/18 | 16 v 10, 11 v A, 9 v 7, 16 v 9 |
+| 4 | S17/H17 | late | 17/21 | 16 v 10, 11 v A, 9 v 7, 16 v 9 |
+| 6 | S17/H17 | none | 17/18 | 16 v 10 |
+| 6 | S17/H17 | late | 21/21 | — |
+| 8 | S17/H17 | none / late | all | — |
+
+**Unsupported:** single deck (card removal at single-deck depths is too large for the composition model) and non-standard variants.
+
+No EV gain from deviations is estimated anywhere. Index plays are graded right or wrong only, and the off-the-top EV-loss figure covers basic-strategy mistakes away from index plays.
+
+### Insurance
+
+Insurance is offered when the dealer shows an Ace (rule `insurance`, on by default):
+- It happens before the peek, and the hole card stays hidden.
+- The stake can be up to half the bet, limited by uncovered chips.
+- It pays 2:1 if the dealer has blackjack and is lost otherwise, settled separately from the hands.
+- Insuring a blackjack works out to even money.
+- AI seats always decline.
+
 ## Rule assumptions
 
 - US hole card with dealer peek. No-hole-card (ENHC) games are not supported.
 - Surrender is late surrender only.
-- Insurance is not offered.
+- Insurance is offered against an Ace (see above).
 - A 21 after a split is not a blackjack.
 
 Pairs split by point value, so K-10 counts as a pair. Doubling restrictions, DAS, the split-hand limit, resplitting aces and hitting split aces are all configurable.

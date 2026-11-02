@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "generate:strategy": "tsx scripts/generate-strategy.ts",
-    "chart": "tsx scripts/print-chart.ts"
+    "chart": "tsx scripts/print-chart.ts",
+    "generate:indices": "tsx scripts/generate-indices.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

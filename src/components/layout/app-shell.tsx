@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calculator, Layers, LayoutDashboard, Settings, Spade, Table2 } from "lucide-react";
+import { Calculator, GitBranch, Layers, LayoutDashboard, Settings, Spade, Table2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -10,6 +10,7 @@ const NAV = [
   { href: "/basic-strategy", label: "Basic Strategy", icon: Spade },
   { href: "/running-count", label: "Running Count", icon: Layers },
   { href: "/true-count", label: "True Count", icon: Calculator },
+  { href: "/deviations", label: "Deviations", icon: GitBranch },
   { href: "/simulator", label: "Blackjack Simulator", icon: Table2 },
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;

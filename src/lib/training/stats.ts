@@ -30,6 +30,8 @@ export interface DayBucket {
   bs: Tally;
   rc: Tally;
   tc: Tally;
+  /** Added in Phase 7; absent in older saved buckets. */
+  dev?: Tally;
 }
 
 export interface RCAttempt {
@@ -71,7 +73,9 @@ export interface Stats {
   };
   /** Simulated table results. Kept apart from decision accuracy and expected value. */
   sim: SimTotals;
-  sessions: Record<"bs" | "rc" | "tc" | "sim", number>;
+  /** Deviation Trainer results by index cell. */
+  dev: { overall: Tally; byCell: Record<string, Tally & { misses: number; lastChosen?: string }> };
+  sessions: Record<"bs" | "rc" | "tc" | "sim" | "dev", number>;
   history: DayBucket[];
 }
 
@@ -103,7 +107,8 @@ export function emptyStats(): Stats {
     rc: { drills: tally(), flashcards: tally(), totalMs: 0, bestDeckMs: null, bestDoubleDeckMs: null, recent: [] },
     tc: { calculate: tally(), deckEstimate: tally(), estimateCalculation: tally(), estimateOverall: tally(), totalMs: 0, timeouts: 0 },
     sim: emptySim(),
-    sessions: { bs: 0, rc: 0, tc: 0, sim: 0 },
+    dev: { overall: tally(), byCell: {} },
+    sessions: { bs: 0, rc: 0, tc: 0, sim: 0, dev: 0 },
     history: [],
   };
 }
@@ -119,6 +124,7 @@ export function parseStats(raw: unknown): Stats | null {
     rc: { ...base.rc, ...r.rc },
     tc: { ...base.tc, ...r.tc },
     sim: { ...base.sim, ...r.sim },
+    dev: { ...base.dev, ...r.dev, byCell: { ...r.dev?.byCell } },
     sessions: { ...base.sessions, ...r.sessions },
     history: Array.isArray(r.history) ? r.history : [],
   };
@@ -129,7 +135,7 @@ export function dayKey(at: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function withDay(stats: Stats, at: number, field: "bs" | "rc" | "tc", correct: boolean): DayBucket[] {
+function withDay(stats: Stats, at: number, field: "bs" | "rc" | "tc" | "dev", correct: boolean): DayBucket[] {
   const key = dayKey(at);
   const history = stats.history.slice();
   let i = history.findIndex((b) => b.date === key);
@@ -138,7 +144,7 @@ function withDay(stats: Stats, at: number, field: "bs" | "rc" | "tc", correct: b
     history.sort((a, b) => a.date.localeCompare(b.date));
     i = history.findIndex((b) => b.date === key);
   }
-  history[i] = { ...history[i], [field]: bump(history[i][field], correct) };
+  history[i] = { ...history[i], [field]: bump(history[i][field] ?? tally(), correct) };
   return history.slice(-120);
 }
 
@@ -234,6 +240,28 @@ export function recordSimRound(
   return { ...s, sim };
 }
 
-export function recordSession(s: Stats, mode: "bs" | "rc" | "tc" | "sim"): Stats {
+export function recordDeviation(s: Stats, e: { at: number; cellId: string; correct: boolean; chosen: string }): Stats {
+  const prev = s.dev.byCell[e.cellId] ?? { attempts: 0, correct: 0, misses: 0 };
+  return {
+    ...s,
+    dev: {
+      overall: bump(s.dev.overall, e.correct),
+      byCell: {
+        ...s.dev.byCell,
+        [e.cellId]: { ...bump(prev, e.correct), misses: prev.misses + (e.correct ? 0 : 1), lastChosen: e.correct ? prev.lastChosen : e.chosen },
+      },
+    },
+    history: withDay(s, e.at, "dev", e.correct),
+  };
+}
+
+/** Index cells still needing work: missed at least once and below 80% accuracy. */
+export function missedDeviationCells(s: Stats): string[] {
+  return Object.entries(s.dev.byCell)
+    .filter(([, t]) => t.misses > 0 && t.correct / t.attempts < 0.8)
+    .map(([id]) => id);
+}
+
+export function recordSession(s: Stats, mode: "bs" | "rc" | "tc" | "sim" | "dev"): Stats {
   return { ...s, sessions: { ...s.sessions, [mode]: s.sessions[mode] + 1 } };
 }

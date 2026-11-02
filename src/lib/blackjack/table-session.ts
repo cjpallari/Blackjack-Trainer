@@ -3,7 +3,7 @@
  * Pure: every function returns a new session. The UI holds the session and
  * renders `buildTableView(session.state, revealed)`.
  */
-import { act, buyIn, createGame, IllegalActionError, runAiTurns, startRound, type GameState, type HandOutcome } from "./engine";
+import { act, buyIn, createGame, IllegalActionError, resolveInsurance, runAiTurns, startRound, type GameState, type HandOutcome } from "./engine";
 import type { Rng } from "./rng";
 import type { TableRules } from "./rules";
 import type { PlayerAction } from "./strategy";
@@ -32,6 +32,9 @@ export interface SessionStats {
   /** Total chips wagered, including doubles and splits. */
   wagered: number;
   buyIns: number;
+  insuranceTaken: number;
+  /** Net result of insurance bets, kept separate from hand results. */
+  insuranceNet: number;
 }
 
 export interface RoundSummary {
@@ -39,6 +42,9 @@ export interface RoundSummary {
   readonly net: number;
   readonly wagered: number;
   readonly outcomes: readonly HandOutcome[];
+  /** Insurance staked and its net result this round (0 / 0 if not taken). */
+  readonly insuranceAmount: number;
+  readonly insuranceNet: number;
 }
 
 export interface TableSession {
@@ -61,6 +67,8 @@ export const emptySessionStats = (): SessionStats => ({
   net: 0,
   wagered: 0,
   buyIns: 0,
+  insuranceTaken: 0,
+  insuranceNet: 0,
 });
 
 export function seatCount(rules: TableRules): number {
@@ -92,7 +100,7 @@ export function humanBankroll(session: TableSession): number {
 /** Why a bet can't be dealt, or null if it can. */
 export function betError(session: TableSession, bet: number): string | null {
   const { minBet, maxBet } = session.config.rules;
-  if (session.state.phase === "playerTurn") return "Round in progress.";
+  if (session.state.phase === "playerTurn" || session.state.phase === "insurance") return "Round in progress.";
   if (!Number.isFinite(bet) || bet <= 0) return "Place a bet.";
   if (bet < minBet) return `Table minimum is ${minBet}.`;
   if (bet > maxBet) return `Table maximum is ${maxBet}.`;
@@ -107,6 +115,12 @@ export function dealRound(session: TableSession, bet: number, rng: Rng): TableSe
   const bets: Record<number, number> = {};
   for (const s of session.state.seats) bets[s.id] = s.kind === "human" ? bet : session.config.rules.minBet;
   return advance(session, runAiTurns(startRound(session.state, bets, rng), rng));
+}
+
+/** The human's insurance decision (0 = decline). AI seats decline, as basic strategy does. */
+export function insuranceDecision(session: TableSession, amount: number, rng: Rng): TableSession {
+  if (session.state.phase !== "insurance") throw new IllegalActionError("Insurance is not being offered.");
+  return advance(session, runAiTurns(resolveInsurance(session.state, { [session.humanSeatId]: amount }, rng), rng));
 }
 
 export function playerAction(session: TableSession, action: PlayerAction, rng: Rng): TableSession {
@@ -125,7 +139,8 @@ export function rebuy(session: TableSession, amount: number): TableSession {
 
 function advance(session: TableSession, state: GameState): TableSession {
   if (state.phase !== "roundOver" || state.roundNumber === session.lastRound?.roundNumber) return { ...session, state };
-  const hands = state.seats[session.humanSeatId].hands;
+  const seat = state.seats[session.humanSeatId];
+  const hands = seat.hands;
   if (hands.length === 0) return { ...session, state };
   const s = { ...session.stats };
   let net = 0;
@@ -153,13 +168,25 @@ function advance(session: TableSession, state: GameState): TableSession {
         s.losses++;
     }
   }
+  const ins = seat.insurance;
   s.rounds++;
-  s.net += net;
+  s.net += net + (ins?.net ?? 0);
   s.wagered += wagered;
+  if (ins) {
+    s.insuranceTaken++;
+    s.insuranceNet += ins.net;
+  }
   return {
     ...session,
     state,
     stats: s,
-    lastRound: { roundNumber: state.roundNumber, net, wagered, outcomes: hands.map((h) => h.outcome!) },
+    lastRound: {
+      roundNumber: state.roundNumber,
+      net: net + (ins?.net ?? 0),
+      wagered,
+      outcomes: hands.map((h) => h.outcome!),
+      insuranceAmount: ins?.amount ?? 0,
+      insuranceNet: ins?.net ?? 0,
+    },
   };
 }

@@ -14,7 +14,7 @@
  */
 import type { Card, Rank, Suit } from "./cards";
 import { hiLoValue } from "./counting";
-import { availableActions, type GameEvent, type GameState, type HandOutcome, type ShuffleReason, type TurnPointer } from "./engine";
+import { availableActions, maxInsurance, type GameEvent, type GameState, type HandOutcome, type ShuffleReason, type TurnPointer } from "./engine";
 import { handValue, isBlackjack, type HandValue } from "./hand";
 import type { PlayerAction } from "./strategy";
 
@@ -42,8 +42,10 @@ export interface SeatView {
   readonly bankroll: number;
   readonly inRound: boolean;
   readonly hands: readonly HandView[];
-  /** Net result of the round for this seat, once settled. */
+  /** Net result of the round for this seat's hands, once settled (insurance separate). */
   readonly roundNet?: number;
+  /** Insurance taken this round; `net` appears once the peek has been shown. */
+  readonly insurance: { readonly amount: number; readonly net?: number } | null;
 }
 
 export interface DealerView {
@@ -78,7 +80,7 @@ export interface CountView {
   readonly valid: boolean;
 }
 
-export type ViewPhase = "idle" | "dealing" | "playerTurn" | "roundOver";
+export type ViewPhase = "idle" | "dealing" | "insurance" | "playerTurn" | "roundOver";
 
 export interface TableView {
   readonly roundNumber: number;
@@ -91,6 +93,8 @@ export interface TableView {
   readonly turn: TurnPointer | null;
   /** Legal actions for the human, when it is their turn. */
   readonly available: readonly PlayerAction[];
+  /** Insurance offer to the human (dealer shows an Ace), with the maximum stake. */
+  readonly insuranceOffer: { readonly max: number } | null;
   readonly shoe: ShoeView;
   readonly count: CountView;
   /** Shuffle events revealed so far this round. */
@@ -115,6 +119,8 @@ export function buildTableView(state: GameState, revealed: number = state.log.le
   const started = state.roundNumber > 0;
 
   const hands = new Map<number, ReplayHand[]>();
+  const insurance = new Map<number, number>();
+  let peeked = false;
   const dealer: { card: Card; faceDown: boolean }[] = [];
   let holeRevealed = false;
   let count = { ...state.roundStart.count };
@@ -140,6 +146,12 @@ export function buildTableView(state: GameState, revealed: number = state.log.le
         break;
       case "bet":
         hands.set(e.seat, [{ cards: [], bet: e.amount, doubled: false, surrendered: false, fromSplit: false }]);
+        break;
+      case "insurance":
+        insurance.set(e.seat, e.amount);
+        break;
+      case "peek":
+        peeked = true;
         break;
       case "deal":
         dealtThisRound++;
@@ -177,11 +189,17 @@ export function buildTableView(state: GameState, revealed: number = state.log.le
     const replay = hands.get(seat.id) ?? [];
     const finalHands = seat.hands;
     const roundNet = finalHands.reduce((sum, h) => sum + (h.net ?? 0), 0);
+    const ins = insurance.get(seat.id);
+    // Insurance is settled at the peek; until the player has seen the peek (or the round's end), hide its result.
+    const insuranceShown = peeked || settled;
+    const hiddenInsuranceNet = seat.insurance && !insuranceShown ? seat.insurance.net : 0;
+    const hiddenHandNet = state.phase === "roundOver" && !settled ? roundNet : 0;
     return {
       id: seat.id,
       name: seat.name,
       kind: seat.kind,
-      bankroll: state.phase === "roundOver" && !settled ? seat.bankroll - roundNet : seat.bankroll,
+      bankroll: seat.bankroll - hiddenHandNet - hiddenInsuranceNet,
+      insurance: ins === undefined ? null : { amount: ins, net: insuranceShown ? seat.insurance?.net : undefined },
       inRound: replay.length > 0,
       roundNet: settled && replay.length > 0 ? roundNet : undefined,
       hands: replay.map((h, i) => ({
@@ -200,17 +218,18 @@ export function buildTableView(state: GameState, revealed: number = state.log.le
 
   const visibleDealer = dealer.filter((d) => !d.faceDown).map((d) => d.card);
   const turn = caughtUp && state.phase === "playerTurn" ? state.turn : null;
+  const human = state.seats.find((s) => s.kind === "human");
+  const insuranceOffer =
+    caughtUp && state.phase === "insurance" && human && human.hands.length > 0 ? { max: maxInsurance(state, human.id) } : null;
   const humanTurn = turn !== null && state.seats[turn.seat].kind === "human";
 
   const shoeTotal = state.rules.decks * 52;
   const interrupted = packSwitched;
   const position = state.roundStart.shoePosition + dealtThisRound;
-  const upRank = dealer[0]?.card.rank;
-  const peekUp = upRank === "A" || upRank === "10" || upRank === "J" || upRank === "Q" || upRank === "K";
 
   return {
     roundNumber: state.roundNumber,
-    phase: !started ? "idle" : !caughtUp ? "dealing" : state.phase === "playerTurn" ? "playerTurn" : "roundOver",
+    phase: !started ? "idle" : !caughtUp ? "dealing" : state.phase === "playerTurn" ? "playerTurn" : state.phase === "insurance" ? "insurance" : "roundOver",
     settled,
     seats,
     dealer: {
@@ -221,6 +240,7 @@ export function buildTableView(state: GameState, revealed: number = state.log.le
     },
     turn,
     available: humanTurn ? availableActions(state) : [],
+    insuranceOffer,
     shoe: {
       decks: state.rules.decks,
       totalCards: shoeTotal,
@@ -235,8 +255,7 @@ export function buildTableView(state: GameState, revealed: number = state.log.le
     },
     count,
     shuffles,
-    // Players learn the dealer has no natural when play continues past the peek.
-    peekedNoBlackjack: peekUp && dealer.length >= 2 && (events.some((e) => e.type === "action") || (caughtUp && state.phase === "playerTurn")),
+    peekedNoBlackjack: peeked,
   };
 }
 
@@ -252,6 +271,9 @@ export function eventWeight(e: GameEvent): number {
     case "action":
       return 0.4;
     case "bet":
+    case "insurance":
       return 0;
+    case "peek":
+      return 1;
   }
 }

@@ -102,6 +102,12 @@ export function SeatSpot({ seat, activeHand, human }: { seat: SeatView; activeHa
       >
         {seat.name}
       </div>
+      {seat.insurance && (
+        <div className="tabular rounded bg-black/40 px-[0.5em] text-[0.7em] leading-[1.6em] text-amber-100">
+          Insurance {seat.insurance.amount}
+          {seat.insurance.net !== undefined && ` · ${seat.insurance.net > 0 ? "+" : "−"}${Math.abs(seat.insurance.net)}`}
+        </div>
+      )}
     </div>
   );
 }

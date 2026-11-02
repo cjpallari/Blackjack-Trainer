@@ -20,6 +20,7 @@ import {
   submitCheck,
   trainingAct,
   trainingDeal,
+  trainingInsurance,
   withSession,
   type TrainingOptions,
   type TrainingTable,
@@ -31,6 +32,8 @@ const OPTS: TrainingOptions = {
   checkpoints: { ...DEFAULT_CHECKPOINTS, every: 0 },
   rounding: "truncate",
   keepDecisionDetail: true,
+  // Phase 6 tests grade against basic strategy; deviation tests opt in.
+  deviations: false,
 };
 
 function table(o: { rules?: Partial<TableRules>; top?: Rank[]; humanSeat?: number; opts?: TrainingOptions; rng?: Rng } = {}): TrainingTable {
@@ -55,6 +58,7 @@ function playShoe(t: TrainingTable, r: Rng, opts: TrainingOptions, answer: "corr
       continue;
     }
     t = trainingDeal(t, 10, opts, r, 2000);
+    if (t.session.state.phase === "insurance") t = trainingInsurance(t, 0, opts, r, 2000);
     while (t.session.state.phase === "playerTurn" && !t.pending) t = trainingAct(t, basicStrategyAction(t.session.state), opts, r, 2000);
     if (t.completedReport) return t;
   }
@@ -210,6 +214,7 @@ describe("strategy decision logging", () => {
   it("dealer blackjack ends the round with no decisions and counts the revealed hole card", () => {
     let t = table({ top: ["9", "A", "9", "K"] });
     t = trainingDeal(t, 10, OPTS, seededRng(1), 1);
+    t = trainingInsurance(t, 0, OPTS, seededRng(1), 1);
     expect(t.tracker.decisions).toHaveLength(0);
     expect(t.tracker.snapshots.at(-1)!.runningCount).toBe(-2); // 9, A, 9, K
   });
@@ -328,6 +333,7 @@ describe("training modes", () => {
     expect(() => requestCheck(t, casino)).toThrow();
     for (let i = 0; i < 200 && !t.pending; i++) {
       t = trainingDeal(t, 10, casino, r, 1);
+      if (t.session.state.phase === "insurance") t = trainingInsurance(t, 0, casino, r, 1);
       while (t.session.state.phase === "playerTurn") t = trainingAct(t, basicStrategyAction(t.session.state), casino, r, 1);
     }
     expect(t.pending).toMatchObject({ kind: "end-of-shoe", termination: "cut-card" });
@@ -350,11 +356,31 @@ describe("persistence", () => {
 
   it("parses versioned history and drops malformed entries", () => {
     expect(parseShoeHistory(null)).toBeNull();
-    expect(parseShoeHistory({ version: 2, reports: [] })).toBeNull();
+    expect(parseShoeHistory({ version: 3, reports: [] })).toBeNull();
     const good = sampleReport("a");
     const parsed = parseShoeHistory({ version: 1, reports: [good, { id: "x" }, 42, null] });
     expect(parsed!.reports.map((r) => r.id)).toEqual(["a"]);
     expect(parseShoeHistory({ version: 1 })!.reports).toEqual([]);
+  });
+
+  it("migrates Phase 6 (version 1) history and reports without losing data", () => {
+    const v2 = sampleReport("old", false);
+    // Reconstruct what Phase 6 saved: version 1 reports without deviation/insurance fields.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { deviations: _d, deviationsNote: _n, insurance: _i, ...rest } = v2;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { grading: _g, basicMatches: _b, ...strategy } = v2.strategy;
+    const v1 = { ...rest, version: 1, strategy };
+    const h = parseShoeHistory(JSON.parse(JSON.stringify({ version: 1, reports: [v1] })))!;
+    expect(h.version).toBe(2);
+    const r = h.reports[0];
+    expect(r.version).toBe(2);
+    expect(r.deviations).toBeNull();
+    expect(r.deviationsNote).toMatch(/before deviation grading/);
+    expect(r.strategy.grading).toBe("basic");
+    expect(r.strategy.basicMatches).toBe(v2.strategy.correct);
+    expect(r.counting).toEqual(v2.counting);
+    expect(aggregateHistory([r]).decisions).toBe(v2.strategy.graded);
   });
 
   it("caps history size, keeps decision detail only for recent shoes, and ignores duplicates", () => {
