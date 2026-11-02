@@ -117,7 +117,7 @@ export function SettingsPanel() {
               className="w-full accent-[var(--primary)]"
             />
           </Field>
-          <Field label="AI players" hint="Used by the table simulator (not built yet).">
+          <Field label="AI players" hint="Other players at the simulator table.">
             <Segmented value={rules.aiPlayers} onChange={(aiPlayers) => setRules({ aiPlayers })} options={[0, 1, 2, 3, 4, 5, 6].map((n) => ({ value: n, label: n }))} />
           </Field>
           <Field label="Table limits" hint="Used by the table simulator.">

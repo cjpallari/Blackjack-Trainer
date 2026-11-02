@@ -12,6 +12,17 @@ export interface Settings {
   bs: BSOptions;
   rc: RCConfig;
   tc: { decks: number; timed: boolean; secondsPerQuestion: number; showTrayGuides: boolean };
+  sim: SimSettings;
+}
+
+export type AnimationSpeed = "instant" | "fast" | "normal" | "slow";
+
+export interface SimSettings {
+  animation: AnimationSpeed;
+  /** 0-based seat from first base. */
+  humanSeat: number;
+  startingBankroll: number;
+  lastBet: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -21,6 +32,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bs: DEFAULT_BS_OPTIONS,
   rc: DEFAULT_RC_CONFIG,
   tc: { decks: 6, timed: false, secondsPerQuestion: 8, showTrayGuides: false },
+  sim: { animation: "normal", humanSeat: 1, startingBankroll: 1000, lastBet: 10 },
 };
 
 export function parseSettings(raw: unknown): Settings | null {
@@ -35,6 +47,7 @@ export function parseSettings(raw: unknown): Settings | null {
     bs: { ...DEFAULT_SETTINGS.bs, ...r.bs },
     rc: { ...DEFAULT_SETTINGS.rc, ...r.rc },
     tc: { ...DEFAULT_SETTINGS.tc, ...r.tc },
+    sim: { ...DEFAULT_SETTINGS.sim, ...r.sim },
   };
 }
 

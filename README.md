@@ -34,6 +34,27 @@ The trainer grades a decision by picking the best EV among the actions that are 
 
 `tests/strategy.test.ts` checks the generated 6-deck S17 and H17 charts cell by cell against the published 6-deck charts (with and without DAS). It also checks the documented differences for double deck and single deck, and confirms that the committed JSON can be regenerated exactly.
 
+## Table simulator
+
+The UI drives the engine through two pure modules:
+
+- **`table-session.ts`**: one human seat plus AI seats. It handles dealing a round, the human's actions (after which AI seats play automatically by basic strategy), buy-ins, and session stats. AI seats bet the table minimum.
+- **`table-view.ts`**: `buildTableView(state, revealed)` replays the round's event log up to `revealed` events. This is how the UI animates deals that the engine resolves all at once.
+
+The view is the information boundary:
+- Face-down cards carry no rank, suit or id.
+- The shoe order is never included.
+- Outcomes, bankroll changes and session stats appear only once the animation has caught up.
+
+The live session lives in module scope inside `use-table.ts`, so components only ever receive the view. `tests/table.test.ts` checks every log prefix of many rounds and confirms that neither the hole card nor the next card in the shoe appears in the view before it should.
+
+Shoe handling:
+- The same physical shoe is dealt in order across rounds until the cut card comes out. The reshuffle happens before the next round.
+- If too few cards remain to start a round safely (`minimumCardsForRound`), the shoe ends early. This is recorded with the shuffle reason `insufficient-cards`.
+- If the shoe still runs out mid-round, the discards are reshuffled to finish the round. The original shoe is kept in `state.interruptedShoe`, the count is flagged `valid: false`, and the old-pack hole card is never counted into the makeshift pack.
+
+`TableView.count` (exposed cards only) and `TableView.shoe` are there for the Phase 6 counting overlay, which should read only the view.
+
 ## Rule assumptions
 
 - US hole card with dealer peek. No-hole-card (ENHC) games are not supported.

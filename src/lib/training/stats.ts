@@ -69,9 +69,24 @@ export interface Stats {
     totalMs: number;
     timeouts: number;
   };
-  sessions: Record<"bs" | "rc" | "tc", number>;
+  /** Simulated table results. Kept apart from decision accuracy and expected value. */
+  sim: SimTotals;
+  sessions: Record<"bs" | "rc" | "tc" | "sim", number>;
   history: DayBucket[];
 }
+
+export interface SimTotals {
+  rounds: number;
+  hands: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  blackjacks: number;
+  net: number;
+  wagered: number;
+}
+
+const emptySim = (): SimTotals => ({ rounds: 0, hands: 0, wins: 0, losses: 0, pushes: 0, blackjacks: 0, net: 0, wagered: 0 });
 
 export function emptyStats(): Stats {
   return {
@@ -87,7 +102,8 @@ export function emptyStats(): Stats {
     },
     rc: { drills: tally(), flashcards: tally(), totalMs: 0, bestDeckMs: null, bestDoubleDeckMs: null, recent: [] },
     tc: { calculate: tally(), deckEstimate: tally(), estimateCalculation: tally(), estimateOverall: tally(), totalMs: 0, timeouts: 0 },
-    sessions: { bs: 0, rc: 0, tc: 0 },
+    sim: emptySim(),
+    sessions: { bs: 0, rc: 0, tc: 0, sim: 0 },
     history: [],
   };
 }
@@ -102,6 +118,7 @@ export function parseStats(raw: unknown): Stats | null {
     bs: { ...base.bs, ...r.bs, byCategory: { ...base.bs.byCategory, ...r.bs?.byCategory } },
     rc: { ...base.rc, ...r.rc },
     tc: { ...base.tc, ...r.tc },
+    sim: { ...base.sim, ...r.sim },
     sessions: { ...base.sessions, ...r.sessions },
     history: Array.isArray(r.history) ? r.history : [],
   };
@@ -202,6 +219,21 @@ export function recordTc(
   return { ...s, tc, history: withDay(s, e.at, "tc", e.tcCorrect) };
 }
 
-export function recordSession(s: Stats, mode: "bs" | "rc" | "tc"): Stats {
+export function recordSimRound(
+  s: Stats,
+  r: { net: number; wagered: number; outcomes: readonly ("blackjack" | "win" | "push" | "lose" | "bust" | "surrender")[] },
+): Stats {
+  const sim = { ...s.sim, rounds: s.sim.rounds + 1, net: s.sim.net + r.net, wagered: s.sim.wagered + r.wagered };
+  for (const o of r.outcomes) {
+    sim.hands++;
+    if (o === "blackjack") sim.blackjacks++;
+    if (o === "blackjack" || o === "win") sim.wins++;
+    else if (o === "push") sim.pushes++;
+    else sim.losses++;
+  }
+  return { ...s, sim };
+}
+
+export function recordSession(s: Stats, mode: "bs" | "rc" | "tc" | "sim"): Stats {
   return { ...s, sessions: { ...s.sessions, [mode]: s.sessions[mode] + 1 } };
 }

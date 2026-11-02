@@ -16,7 +16,7 @@ export function Dashboard() {
   const rcAll = sum(rc.drills, rc.flashcards);
   const tcAll = sum(tc.calculate, tc.estimateOverall);
   const missed = missedScenarios(stats).slice(0, 10);
-  const sessions = stats.sessions.bs + stats.sessions.rc + stats.sessions.tc;
+  const sessions = stats.sessions.bs + stats.sessions.rc + stats.sessions.tc + stats.sessions.sim;
   const avgMs = bs.overall.attempts ? bs.totalMs / bs.overall.attempts : null;
 
   return (
@@ -41,7 +41,7 @@ export function Dashboard() {
           <StatTile label="Best deck" value={rc.bestDeckMs ? formatMs(rc.bestDeckMs) : "—"} sub="correct countdowns only" />
           <StatTile label="True count" value={pct(accuracy(tcAll))} sub={`${tcAll.attempts} answers`} />
           <StatTile label="Deck estimation" value={pct(accuracy(tc.deckEstimate))} sub={`${tc.deckEstimate.attempts} estimates`} />
-          <StatTile label="Sessions" value={sessions} sub={`BS ${stats.sessions.bs} · RC ${stats.sessions.rc} · TC ${stats.sessions.tc}`} />
+          <StatTile label="Sessions" value={sessions} sub={`BS ${stats.sessions.bs} · RC ${stats.sessions.rc} · TC ${stats.sessions.tc} · Table ${stats.sessions.sim}`} />
         </div>
       </section>
 
@@ -105,9 +105,15 @@ export function Dashboard() {
         </div>
         <div className="rounded-xl border border-border bg-card p-4 text-sm">
           <h2 className="mb-1 font-semibold">Simulated bankroll</h2>
-          <p className="text-xs text-muted-foreground">
-            Bankroll results will come from the table simulator, which isn&apos;t built yet. When they appear they will be kept separate from
-            decision accuracy and expected value: a short winning session is mostly variance and does not show a positive edge.
+          <p className="tabular text-2xl font-semibold">
+            {stats.sim.rounds ? `${stats.sim.net > 0 ? "+" : stats.sim.net < 0 ? "−" : ""}${Math.abs(stats.sim.net).toLocaleString()}` : "—"}
+          </p>
+          <p className="tabular text-xs text-muted-foreground">
+            {stats.sim.rounds} rounds · {stats.sim.hands} hands · W/L/P {stats.sim.wins}/{stats.sim.losses}/{stats.sim.pushes} · {stats.sim.wagered.toLocaleString()} wagered
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Observed chips won or lost at the simulator table. This is mostly variance over any practical number of hands: a winning session does not show
+            a positive edge, and a losing one does not show a mistake.
           </p>
         </div>
       </section>

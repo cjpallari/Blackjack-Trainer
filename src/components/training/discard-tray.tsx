@@ -5,9 +5,23 @@ import { seededRng } from "@/lib/blackjack/rng";
  * a constant physical scale for a given shoe size, so the user has to judge
  * thickness rather than read a number. Optional deck guide lines.
  */
-export function DiscardTray({ decks, cardsDealt, seed, guides }: { decks: number; cardsDealt: number; seed: number; guides: boolean }) {
-  // Pixels per deck: one scale for shoes (4–8 decks), a zoomed one for pitch games.
-  const perDeck = decks <= 2 ? 90 : 34;
+export function DiscardTray({
+  decks,
+  cardsDealt,
+  seed,
+  guides,
+  perDeck: perDeckOverride,
+  className = "h-auto w-full max-w-[220px]",
+}: {
+  decks: number;
+  cardsDealt: number;
+  seed: number;
+  guides: boolean;
+  /** Pixels (viewBox units) per deck. Defaults to one scale for shoes and a zoomed one for pitch games. */
+  perDeck?: number;
+  className?: string;
+}) {
+  const perDeck = perDeckOverride ?? (decks <= 2 ? 90 : 34);
   const capacity = decks * perDeck;
   const W = 150;
   const pad = 10;
@@ -27,7 +41,7 @@ export function DiscardTray({ decks, cardsDealt, seed, guides }: { decks: number
   }
 
   return (
-    <svg viewBox={`0 0 ${W + 40} ${H}`} className="h-auto w-full max-w-[220px]" role="img" aria-label="Discard tray">
+    <svg viewBox={`0 0 ${W + 40} ${H}`} className={className} role="img" aria-label="Discard tray">
       <defs>
         <pattern id="card-edges" width="4" height="1.3" patternUnits="userSpaceOnUse">
           <rect width="4" height="1.3" fill="#f5f5f0" />

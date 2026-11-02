@@ -5,6 +5,7 @@ import {
   act,
   availableActions,
   basicStrategyAction,
+  buyIn,
   createGame,
   IllegalActionError,
   runAiTurns,
@@ -254,16 +255,68 @@ describe("shoe progression", () => {
     expect(g.log[0]).toEqual({ type: "shuffle", reason: "cut-card" });
   });
 
-  it("recovers safely when the shoe is physically exhausted mid-round", () => {
+  it("ends the shoe early, before dealing, when too few cards remain for a round", () => {
     let g = setup([], { decks: 1 }, 1);
-    // Leave 3 cards in the shoe: not enough for a full deal.
     g = { ...g, shoe: { ...g.shoe, position: 49, cutCardIndex: 52 } };
     g = startRound(g, bets(1), rng);
-    while (g.phase === "playerTurn") g = act(g, "hit", rng);
+    expect(g.log[0]).toEqual({ type: "shuffle", reason: "insufficient-cards" });
+    expect(g.shoeNumber).toBe(2);
+    expect(g.count.valid).toBe(true);
+  });
+
+  it("recovers from mid-round exhaustion, keeps the original shoe and flags the count", () => {
+    let g = setup([], { decks: 1 }, 1);
+    // Last 8 cards: P A, D 2, P A, hole 2, then A A 2 2 → player soft 18 with nothing left.
+    const stacked = stackedShoe(1, ["A", "2", "A", "2", "A", "A", "2", "2"], rng);
+    const cards = [...stacked.cards.slice(8), ...stacked.cards.slice(0, 8)];
+    const original = { decks: 1, cards, position: 44, cutCardIndex: 52 };
+    g = { ...g, shoe: original };
+    g = startRound(g, bets(1), rng);
+    for (let i = 0; i < 4; i++) g = act(g, "hit", rng);
+    expect(g.interruptedShoe).toBeNull(); // not yet exhausted
+    g = act(g, "hit", rng); // forces the emergency reshuffle
+    while (g.phase === "playerTurn") g = act(g, "stand", rng);
+
+    expect(g.log.some((e) => e.type === "shuffle" && e.reason === "exhausted")).toBe(true);
+    expect(g.interruptedShoe!.cards).toBe(original.cards);
+    expect(g.interruptedShoe!.position).toBe(52);
+    expect(g.interruptedShoe!.cards.map((c) => c.id)).toEqual(cards.map((c) => c.id));
+    expect(g.count.valid).toBe(false);
+    expect(g.reshufflePending).toBe(true);
     const onTable = visibleCards(g).map((c) => c.id);
     expect(new Set(onTable).size).toBe(onTable.length);
-    expect(g.reshufflePending).toBe(true);
-    expect(g.log.some((e) => e.type === "shuffle" && e.reason === "exhausted")).toBe(true);
+    // The count covers only cards drawn from the makeshift pack; the old-pack hole card is excluded.
+    expect(g.count.runningCount).toBe(runningCount(g.shoe.cards.slice(0, g.shoe.position)));
+
+    // Next round starts a genuinely fresh shoe with a valid count.
+    g = startRound(g, bets(1), rng);
+    expect(g.count.valid).toBe(true);
+    expect(g.interruptedShoe).toBeNull();
+  });
+});
+
+describe("bankroll", () => {
+  it("rejects bets the seat cannot cover", () => {
+    const g = setup(["2", "3", "4", "5"]);
+    const poor = { ...g, seats: g.seats.map((s) => ({ ...s, bankroll: 5 })) };
+    expect(() => startRound({ ...poor, rules: { ...poor.rules, minBet: 1 } }, { 0: 10 }, rng)).toThrow(IllegalActionError);
+  });
+
+  it("offers double and split only when the bankroll covers the extra wager", () => {
+    const top: Rank[] = ["8", "6", "8", "10"];
+    const g = setup(top);
+    const rich = startRound(g, { 0: 10 }, rng);
+    expect(availableActions(rich)).toEqual(expect.arrayContaining(["double", "split"]));
+    const tight = startRound({ ...g, seats: g.seats.map((s) => ({ ...s, bankroll: 15 })) }, { 0: 10 }, rng);
+    expect(availableActions(tight)).not.toContain("double");
+    expect(availableActions(tight)).not.toContain("split");
+  });
+
+  it("buy-ins add chips between rounds only", () => {
+    const g = setup(["2", "3", "4", "5", "6", "7"]);
+    expect(buyIn(g, 0, 500).seats[0].bankroll).toBe(1500);
+    const playing = startRound(setup(["2", "9", "3", "7"]), bets(1), rng);
+    expect(() => buyIn(playing, 0, 100)).toThrow(IllegalActionError);
   });
 });
 
@@ -275,10 +328,11 @@ describe("integration: many complete rounds", () => {
   ])("%s: preserves composition and accounting", (_, overrides) => {
     const r = seededRng(2024);
     const rules = { ...DEFAULT_RULES, ...overrides };
+    const start = 1_000_000;
     const seats = [
-      { kind: "ai" as const, name: "AI 1", bankroll: 0 },
-      { kind: "human" as const, name: "You", bankroll: 0 },
-      { kind: "ai" as const, name: "AI 2", bankroll: 0 },
+      { kind: "ai" as const, name: "AI 1", bankroll: start },
+      { kind: "human" as const, name: "You", bankroll: start },
+      { kind: "ai" as const, name: "AI 2", bankroll: start },
     ];
     let g = createGame(rules, seats, r);
     let shoeSeen = new Set<string>();
@@ -296,7 +350,7 @@ describe("integration: many complete rounds", () => {
         g = runAiTurns(g, r);
       }
       expect(g.phase).toBe("roundOver");
-      const exhausted = g.log.some((e) => e.type === "shuffle" && e.reason === "exhausted");
+      const exhausted = !g.count.valid;
       const roundCards = visibleCards(g);
       for (const c of roundCards) {
         if (!exhausted) expect(shoeSeen.has(c.id), `duplicate ${c.id}`).toBe(false);
@@ -309,7 +363,7 @@ describe("integration: many complete rounds", () => {
           expect(h.outcome).toBeDefined();
           nets[i] += h.net!;
         }
-        expect(s.bankroll).toBeCloseTo(nets[i], 9);
+        expect(s.bankroll - start).toBeCloseTo(nets[i], 9);
       });
     }
     expect(g.roundNumber).toBe(400);

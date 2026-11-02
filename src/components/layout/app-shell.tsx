@@ -10,7 +10,7 @@ const NAV = [
   { href: "/basic-strategy", label: "Basic Strategy", icon: Spade },
   { href: "/running-count", label: "Running Count", icon: Layers },
   { href: "/true-count", label: "True Count", icon: Calculator },
-  { href: "/simulator", label: "Blackjack Simulator", icon: Table2, pending: true },
+  { href: "/simulator", label: "Blackjack Simulator", icon: Table2 },
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
@@ -30,19 +30,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {NAV.map((item) => {
             const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
             const Icon = item.icon;
-            if ("pending" in item && item.pending) {
-              return (
-                <span
-                  key={item.href}
-                  title="Planned for Phase 5. The table engine is built and tested; the table UI is not yet."
-                  className="flex shrink-0 cursor-not-allowed items-center gap-2.5 rounded-md px-3 py-2 text-sm text-muted-foreground/50"
-                >
-                  <Icon className="size-4" />
-                  {item.label}
-                  <span className="ml-auto rounded border border-border px-1.5 text-[10px] uppercase tracking-wide">Soon</span>
-                </span>
-              );
-            }
             return (
               <Link
                 key={item.href}
