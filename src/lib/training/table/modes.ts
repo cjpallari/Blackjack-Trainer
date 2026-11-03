@@ -27,12 +27,16 @@ export interface Assistance {
   readonly checkpointFeedback: "immediate" | "deferred";
   /** The player may request a count check. */
   readonly manualChecks: boolean;
+  /** Show the ramp's suggested wager before betting (betting training). */
+  readonly betHint: boolean;
+  /** Feedback on the wager right after it is placed, or only in the shoe report. */
+  readonly betFeedback: "immediate" | "deferred";
 }
 
 export function assistanceFor(mode: TrainingMode, intermediate: IntermediateOptions): Assistance {
   switch (mode) {
     case "beginner":
-      return { liveCount: true, strategyHint: true, decisionFeedback: "immediate", checkpointFeedback: "immediate", manualChecks: true };
+      return { liveCount: true, strategyHint: true, decisionFeedback: "immediate", checkpointFeedback: "immediate", manualChecks: true, betHint: true, betFeedback: "immediate" };
     case "intermediate":
       return {
         liveCount: false,
@@ -40,8 +44,10 @@ export function assistanceFor(mode: TrainingMode, intermediate: IntermediateOpti
         decisionFeedback: intermediate.immediateFeedback ? "immediate" : "deferred",
         checkpointFeedback: "immediate",
         manualChecks: true,
+        betHint: false,
+        betFeedback: "immediate",
       };
     case "casino":
-      return { liveCount: false, strategyHint: false, decisionFeedback: "deferred", checkpointFeedback: "deferred", manualChecks: false };
+      return { liveCount: false, strategyHint: false, decisionFeedback: "deferred", checkpointFeedback: "deferred", manualChecks: false, betHint: false, betFeedback: "deferred" };
   }
 }

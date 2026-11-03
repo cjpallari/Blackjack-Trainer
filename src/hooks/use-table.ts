@@ -14,6 +14,8 @@ import { hintFromView, type DecisionRecord, type InsuranceRecord, type TableHint
 import { addReport } from "@/lib/training/table/history";
 import { assistanceFor, type Assistance } from "@/lib/training/table/modes";
 import type { CheckpointRecord, DeviationSetInfo, ShoeReport } from "@/lib/training/table/shoe-tracker";
+import { recommendBet, type BetRecord } from "@/lib/training/table/betting";
+import { preBetFromView } from "@/lib/betting/observe";
 import {
   abandonShoe,
   canRequestCheck,
@@ -72,6 +74,12 @@ export interface TableController {
   insure: (amount: number) => void;
   /** Index set in use for this shoe, or why deviations are not graded. */
   deviationSet: DeviationSetInfo | null;
+  /** Betting training is on. */
+  bettingTraining: boolean;
+  /** The ramp's wager for the next round, when the mode shows betting hints. */
+  betSuggestion: { amount: number; trueCount: number; sitsOut: boolean } | null;
+  /** Grade of the wager just placed, when the mode gives immediate betting feedback. */
+  betFeedback: BetRecord | null;
   /** A count check to answer now (shown only once the table has settled). */
   pending: PendingCheck | null;
   canCheck: boolean;
@@ -107,8 +115,11 @@ export function useTableController(): TableController {
       rounding: settings.rounding,
       keepDecisionDetail: training.keepDecisionDetail,
       deviations: training.deviations,
+      betting: settings.betting.tableTraining
+        ? { ramp: settings.betting.ramp, limits: { tableMin: settings.rules.minBet, tableMax: settings.rules.maxBet, chip: 5 } }
+        : null,
     }),
-    [training, settings.rounding],
+    [training, settings.rounding, settings.betting.tableTraining, settings.betting.ramp, settings.rules.minBet, settings.rules.maxBet],
   );
   const assistance = assistanceFor(opts.mode, opts.intermediate);
 
@@ -249,6 +260,12 @@ export function useTableController(): TableController {
       run((t) => trainingInsurance(t, amount, opts, rng, Date.now()), false);
     },
     deviationSet: table?.tracker.deviationSet ?? null,
+    bettingTraining: !!opts.betting,
+    betSuggestion:
+      opts.betting && assistance.betHint && view && (view.phase === "idle" || view.settled) && !checkOpen
+        ? recommendBet(opts.betting, preBetFromView(view, view.seats.find((s) => s.kind === "human")!.bankroll), opts.rounding)
+        : null,
+    betFeedback: opts.betting && assistance.betFeedback === "immediate" && !checkOpen ? (table?.lastBet ?? null) : null,
     pending,
     canCheck: !!table && caughtUp && canRequestCheck(table, opts),
     requestCheck: () => run((t) => requestCheck(t, opts), false),

@@ -151,6 +151,24 @@ export function ShoeReportView({ report: r }: { report: ShoeReport }) {
         )}
       </section>
 
+      {r.betting && (
+        <section className="space-y-2">
+          <h3 className="text-sm font-semibold">Betting (ramp: {r.betting.rampName})</h3>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <StatTile label="Bets matching ramp" value={`${r.betting.correct}/${r.betting.decisions}`} sub={pct(r.betting.correct / r.betting.decisions, 0)} />
+          </div>
+          {r.betting.misses.length > 0 && (
+            <p className="tabular text-xs text-muted-foreground">
+              Off-ramp bets:{" "}
+              {r.betting.misses
+                .map((m) => `round ${m.round} at TC ${m.trueCount > 0 ? "+" : ""}${m.trueCount}: bet ${m.chosen}, ramp ${m.recommended}`)
+                .join("; ")}
+            </p>
+          )}
+          <p className="text-[11px] text-muted-foreground">Graded separately from playing strategy and counting; an off-ramp bet is not a playing mistake.</p>
+        </section>
+      )}
+
       <section className="space-y-2">
         <h3 className="text-sm font-semibold">Shoe</h3>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">

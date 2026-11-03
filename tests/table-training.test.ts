@@ -315,7 +315,15 @@ describe("training modes", () => {
 
   it("Casino Mode shows no count, no hints, and defers all feedback", () => {
     const a = assistanceFor("casino", { hints: true, immediateFeedback: true });
-    expect(a).toEqual({ liveCount: false, strategyHint: false, decisionFeedback: "deferred", checkpointFeedback: "deferred", manualChecks: false });
+    expect(a).toEqual({
+      liveCount: false,
+      strategyHint: false,
+      decisionFeedback: "deferred",
+      checkpointFeedback: "deferred",
+      manualChecks: false,
+      betHint: false,
+      betFeedback: "deferred",
+    });
     expect(assistanceFor("beginner", DEFAULT_INTERMEDIATE)).toMatchObject({ liveCount: true, strategyHint: true, decisionFeedback: "immediate" });
     expect(assistanceFor("intermediate", { hints: false, immediateFeedback: false })).toMatchObject({
       liveCount: false,

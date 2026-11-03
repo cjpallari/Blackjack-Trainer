@@ -123,6 +123,20 @@ Insurance is offered when the dealer shows an Ace (rule `insurance`, on by defau
 - Insuring a blackjack works out to even money.
 - AI seats always decline.
 
+## Betting and bankroll simulation
+
+The **Betting & Bankroll** page simulates betting ramps on real shuffled shoes. The method, validation and measured double-deck results are in [docs/betting-simulation.md](docs/betting-simulation.md).
+
+- **Betting ramps** (`lib/betting/ramp.ts`) map the observed true count to units, with table limits, chip size and bankroll caps. A bet may use only the exposed-card count, the cards left (estimated to a quarter deck) and the bankroll.
+- **Simulation** (`lib/sim/`) drives the same reference engine as the table, at about 150,000–190,000 rounds per second, in a Web Worker in the browser.
+  - It plays basic strategy, or basic strategy plus validated indices only, counting every fallback.
+  - Runs are seeded and reproducible. Spread comparisons use common random numbers, so strategies see identical shoes.
+- **Expected value** is net ÷ initial wagers, or ÷ all money wagered; both are reported and labelled separately. 95% intervals use whole shoes as the independent units.
+- **Risk of ruin** is simulated for a finite number of rounds, over independent sessions with full settlement, with Wilson intervals. The infinite-horizon formula exp(−2μB/σ²) is shown separately and labelled as an approximation.
+- **Short-term results** are dominated by variance. A positive result is meaningful only when its interval excludes zero.
+- **Betting training** at the simulator table grades each wager against your ramp. This is tracked separately from playing strategy and counting. Beginner shows the suggested wager, Intermediate gives feedback after the bet, and Casino defers everything to the shoe report.
+- **Scope:** these are conventional-blackjack results only. They do not apply to Blackjack Elite.
+
 ## Rule assumptions
 
 - US hole card with dealer peek. No-hole-card (ENHC) games are not supported.

@@ -7,6 +7,8 @@ import { DEFAULT_CHECKPOINTS, type CheckpointConfig } from "../training/table/co
 import { emptyShoeHistory, parseShoeHistory, type ShoeHistory } from "../training/table/history";
 import { DEFAULT_INTERMEDIATE, type IntermediateOptions, type TrainingMode } from "../training/table/modes";
 import { createPersistentStore } from "./persistent-store";
+import { DEFAULT_LIMITS, RAMP_PRESETS, type BetLimits, type BettingRamp } from "../betting/ramp";
+import type { PlayStrategy } from "../sim/simulate";
 
 export interface Settings {
   version: 1;
@@ -17,6 +19,28 @@ export interface Settings {
   tc: { decks: number; timed: boolean; secondsPerQuestion: number; showTrayGuides: boolean };
   dev: { filter: "all" | "valuable" | "positive" | "negative" | "missed" | string; showTrueCount: boolean; showTray: boolean };
   sim: SimSettings;
+  betting: BettingSettings;
+}
+
+export interface BettingSettings {
+  ramp: BettingRamp;
+  limits: BetLimits;
+  /** Simulation-only settings. */
+  otherPlayers: number;
+  seat: number;
+  play: PlayStrategy;
+  /** Penetration used by the betting lab (independent of the table rules). */
+  penetration: number;
+  rounds: number;
+  /** Illustrative assumption for hourly figures. */
+  roundsPerHour: number;
+  seed: number;
+  bankroll: number;
+  horizon: number;
+  trials: number;
+  profitTarget: number;
+  /** Betting Training Mode at the simulator table. */
+  tableTraining: boolean;
 }
 
 export type AnimationSpeed = "instant" | "fast" | "normal" | "slow";
@@ -48,6 +72,22 @@ export const DEFAULT_SETTINGS: Settings = {
   rc: DEFAULT_RC_CONFIG,
   tc: { decks: 6, timed: false, secondsPerQuestion: 8, showTrayGuides: false },
   dev: { filter: "all", showTrueCount: true, showTray: false },
+  betting: {
+    ramp: RAMP_PRESETS[4],
+    limits: DEFAULT_LIMITS,
+    otherPlayers: 2,
+    seat: 1,
+    play: "deviations",
+    penetration: 0.7,
+    rounds: 100_000,
+    roundsPerHour: 100,
+    seed: 1,
+    bankroll: 5000,
+    horizon: 5000,
+    trials: 200,
+    profitTarget: 2500,
+    tableTraining: false,
+  },
   sim: {
     animation: "normal",
     humanSeat: 1,
@@ -70,6 +110,7 @@ export function parseSettings(raw: unknown): Settings | null {
     rc: { ...DEFAULT_SETTINGS.rc, ...r.rc },
     tc: { ...DEFAULT_SETTINGS.tc, ...r.tc },
     dev: { ...DEFAULT_SETTINGS.dev, ...r.dev },
+    betting: { ...DEFAULT_SETTINGS.betting, ...r.betting, limits: { ...DEFAULT_SETTINGS.betting.limits, ...r.betting?.limits } },
     sim: {
       ...DEFAULT_SETTINGS.sim,
       ...r.sim,

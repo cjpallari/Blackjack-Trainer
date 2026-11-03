@@ -178,6 +178,18 @@ export function BlackjackTable() {
                 Deal <Kbd>Enter</Kbd>
               </Button>
               {pendingError && bet > 0 && <span className="w-full text-center text-xs text-destructive">{pendingError}</span>}
+              {t.betSuggestion && (
+                <span className="flex w-full items-center justify-center gap-2 text-xs">
+                  <span className="rounded-full bg-primary/15 px-3 py-1 font-medium text-primary">
+                    Ramp: {money(t.betSuggestion.amount)} at TC {t.betSuggestion.trueCount > 0 ? "+" : ""}
+                    {t.betSuggestion.trueCount}
+                    {t.betSuggestion.sitsOut ? " (ramp sits out; table minimum)" : ""}
+                  </span>
+                  <Button variant="ghost" size="xs" onClick={() => setBet(t.betSuggestion!.amount)}>
+                    Use
+                  </Button>
+                </span>
+              )}
             </>
           )}
           {t.canCheck && !t.animating && (
@@ -187,6 +199,13 @@ export function BlackjackTable() {
           )}
         </div>
         <div aria-live="polite" className="space-y-1.5">
+          {t.betFeedback && view && !betting && (
+            <p className={cn("text-center text-xs", t.betFeedback.correct ? "text-success" : "text-amber-300")}>
+              {t.betFeedback.correct
+                ? `✓ Bet ${money(t.betFeedback.chosen)} matches your ramp at TC ${t.betFeedback.trueCount > 0 ? "+" : ""}${t.betFeedback.trueCount}.`
+                : `Your ramp calls for ${money(t.betFeedback.recommended)} at TC ${t.betFeedback.trueCount > 0 ? "+" : ""}${t.betFeedback.trueCount}; you bet ${money(t.betFeedback.chosen)}. Betting is graded separately from play.`}
+            </p>
+          )}
           {t.insuranceFeedback && !checkOpen && <InsuranceFeedback r={t.insuranceFeedback} />}
           {t.decisionFeedback && !checkOpen && <DecisionFeedback key={`${view?.roundNumber}-${t.shoeDecisions}`} d={t.decisionFeedback} />}
           {t.checkpointFeedback && <CheckpointFeedback cp={t.checkpointFeedback} />}
@@ -197,6 +216,20 @@ export function BlackjackTable() {
 
       <aside className="space-y-4">
         <TrainingSettingsPanel value={sim.training} onChange={setTraining} />
+        <label className="flex items-start gap-2 rounded-xl border border-border bg-card p-3 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1 accent-[var(--primary)]"
+            checked={settings.betting.tableTraining}
+            onChange={(e) => setSettings((s) => ({ ...s, betting: { ...s.betting, tableTraining: e.target.checked } }))}
+          />
+          <span>
+            Betting training: grade each wager against your ramp ({settings.betting.ramp.name}).{" "}
+            <Link href="/betting" className="text-primary hover:underline">
+              Edit ramp
+            </Link>
+          </span>
+        </label>
         {view && (
           <p className="text-xs text-muted-foreground">
             Shoe {t.shoeNumber} · {t.shoeRounds} round{t.shoeRounds === 1 ? "" : "s"} played · {t.shoeDecisions} decision{t.shoeDecisions === 1 ? "" : "s"} logged

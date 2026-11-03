@@ -53,12 +53,13 @@ export function ShoeHistorySection() {
           {agg.excludedShoes ? ` (${agg.excludedShoes} interrupted shoe${agg.excludedShoes > 1 ? "s" : ""} excluded)` : ""}.
         </p>
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
         <StatTile label="Shoes" value={agg.shoes} sub={`${agg.validShoes} with valid counts`} />
         <StatTile label="Count checks" value={pct(ratio(agg.rcCorrect, agg.checkpoints))} sub={`${agg.rcCorrect}/${agg.checkpoints} exact`} />
         <StatTile label="Final counts" value={pct(ratio(agg.finalCorrect, agg.finalAnswered))} sub={`${agg.finalCorrect}/${agg.finalAnswered} exact`} />
         <StatTile label="True counts" value={pct(ratio(agg.tcCorrect, agg.tcAnswered))} sub={`${agg.tcAnswered} answered`} />
         <StatTile label="Deck estimates" value={pct(ratio(agg.deckCorrect, agg.deckEstimates))} sub={`${agg.deckEstimates} estimates`} />
+        <StatTile label="Betting vs ramp" value={pct(ratio(agg.betCorrect, agg.betDecisions))} sub={`${agg.betDecisions} wagers graded`} />
         <StatTile
           label="Table strategy"
           value={pct(ratio(agg.decisionsCorrect, agg.decisions), 1)}

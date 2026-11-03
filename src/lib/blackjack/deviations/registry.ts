@@ -178,13 +178,19 @@ export function cellValidation(set: IndexSet, cellId: string, convention: TrueCo
  * can. Only Monte Carlo-validated indices are graded; synthetic stability
  * alone is not enough.
  */
-export function cellUnavailableReason(set: IndexSet, cell: DeviationCell, rules: TableRules, convention: TrueCountRounding): string | null {
-  const e = entryFor(set, cell.id);
-  if (!e) return "Not in this index set.";
+/** Why the table rules make this not an index play at all (independent of validation), or null. */
+export function cellRuleReason(set: IndexSet, cell: DeviationCell, rules: TableRules): string | null {
+  if (!entryFor(set, cell.id)) return "Not in this index set.";
   if (cell.kind === "insurance" && !rules.insurance) return "Insurance is not offered at this table.";
   if (!set.surrender && cell.published.every((p) => p.above === "surrender")) return "This is a surrender play; the table does not offer surrender.";
   if (cell.hand?.kind === "hard" && cell.actions.includes("double") && !canDoubleTotal(rules, cell.hand.total, false))
     return `Doubling ${cell.hand.total} is not allowed under these rules.`;
+  return null;
+}
+
+export function cellUnavailableReason(set: IndexSet, cell: DeviationCell, rules: TableRules, convention: TrueCountRounding): string | null {
+  const rule = cellRuleReason(set, cell, rules);
+  if (rule) return rule;
   const v = cellValidation(set, cell.id, convention);
   if (v.status !== "validated") return `${v.status === "experimental" ? "Experimental" : "Disabled"}: ${v.reason}`;
   return null;

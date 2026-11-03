@@ -7,6 +7,7 @@ import type { PlayerAction } from "../../blackjack/strategy";
 import { describeRules } from "../../blackjack/rules";
 import type { CheckpointActual, CheckpointAnswer, CheckpointGrade, CheckpointTrigger } from "./count-checks";
 import type { DecisionRecord, InsuranceRecord } from "./decisions";
+import type { BetRecord } from "./betting";
 import type { TrainingMode } from "./modes";
 
 /** Count state after a completed round, when every card dealt so far has been seen. */
@@ -49,6 +50,8 @@ export interface ShoeTracker {
   readonly checkpoints: readonly CheckpointRecord[];
   readonly decisions: readonly DecisionRecord[];
   readonly insurance: readonly (InsuranceRecord & { readonly net: number })[];
+  /** Wagers graded against the betting ramp (betting training only). */
+  readonly bets: readonly BetRecord[];
   /** False once the engine flags the count invalid (mid-round exhaustion). */
   readonly countValid: boolean;
   /** Index set used for deviation grading, or why there is none. */
@@ -70,9 +73,14 @@ export function createTracker(shoeNumber: number, rules: TableRules, mode: Train
     checkpoints: [],
     decisions: [],
     insurance: [],
+    bets: [],
     countValid: true,
     deviationSet,
   };
+}
+
+export function recordBet(t: ShoeTracker, b: BetRecord): ShoeTracker {
+  return { ...t, bets: [...t.bets, b] };
 }
 
 export function recordInsurance(t: ShoeTracker, r: InsuranceRecord & { net: number }): ShoeTracker {
@@ -186,6 +194,13 @@ export interface ShoeReport {
   /** Count-based play results; null when no index set was active (see deviationsNote). */
   readonly deviations: DeviationReport | null;
   readonly deviationsNote: string | null;
+  /** Betting-ramp accuracy, separate from playing strategy and counting (absent before Phase 8). */
+  readonly betting?: {
+    readonly rampName: string;
+    readonly decisions: number;
+    readonly correct: number;
+    readonly misses: readonly { readonly round: number; readonly trueCount: number; readonly recommended: number; readonly chosen: number }[];
+  } | null;
   readonly insurance: {
     readonly offered: number;
     readonly taken: number;
@@ -291,6 +306,17 @@ export function buildShoeReport(
     },
     deviations: deviationsOn ? deviationReport(t, (t.deviationSet as { id: string }).id) : null,
     deviationsNote: "unavailable" in t.deviationSet ? t.deviationSet.unavailable : null,
+    betting: t.bets.length
+      ? {
+          rampName: t.bets[0].rampName,
+          decisions: t.bets.length,
+          correct: t.bets.filter((b) => b.correct).length,
+          misses: t.bets
+            .filter((b) => !b.correct)
+            .slice(0, 20)
+            .map((b) => ({ round: b.round, trueCount: b.trueCount, recommended: b.recommended, chosen: b.chosen })),
+        }
+      : null,
     insurance: t.insurance.length
       ? {
           offered: t.insurance.length,

@@ -17,12 +17,15 @@ import { createTableSession, dealRound, insuranceDecision, playerAction, type Ta
 import { actualFromView, gradeCheckpoint, shouldCheckpoint, type CheckpointAnswer, type CheckpointConfig } from "./count-checks";
 import { gradeInsurance, gradeTableDecision, type DecisionRecord, type DeviationContext, type InsuranceRecord } from "./decisions";
 import { assistanceFor, type IntermediateOptions, type TrainingMode } from "./modes";
+import { gradeBet, type BetRecord, type BettingTrainingOptions } from "./betting";
+import { preBetObservation } from "../../sim/simulate";
 import {
   buildShoeReport,
   createTracker,
   noteMode,
   recordCheckpoint,
   recordDecision,
+  recordBet,
   recordInsurance,
   recordRound,
   type DeviationSetInfo,
@@ -41,6 +44,8 @@ export interface TrainingOptions {
   readonly keepDecisionDetail: boolean;
   /** Grade index plays (count-adjusted strategy) when a validated index set exists. */
   readonly deviations: boolean;
+  /** Betting training: grade each wager against this ramp (null = off). */
+  readonly betting?: BettingTrainingOptions | null;
 }
 
 /** Deviation grading context for these rules, or undefined when off. */
@@ -67,6 +72,7 @@ export interface TrainingTable {
   readonly pending: PendingCheck | null;
   readonly lastDecision: DecisionRecord | null;
   readonly lastInsurance: InsuranceRecord | null;
+  readonly lastBet: BetRecord | null;
   readonly lastCheckpoint: CheckpointRecord | null;
   /** Report for the shoe that just ended; cleared when the next round is dealt. */
   readonly completedReport: ShoeReport | null;
@@ -82,6 +88,7 @@ export function createTrainingTable(config: TableConfig, opts: TrainingOptions, 
     pending: null,
     lastDecision: null,
     lastInsurance: null,
+    lastBet: null,
     lastCheckpoint: null,
     completedReport: null,
     lastRecordedRound: 0,
@@ -99,12 +106,18 @@ export function shoeEndReason(state: GameState): ShoeTermination | null {
 
 export function trainingDeal(t: TrainingTable, bet: number, opts: TrainingOptions, rng: Rng, at: number): TrainingTable {
   if (t.pending) throw new IllegalActionError("Finish the count check first.");
+  // Grade the wager from what was visible before the deal (never the undealt cards).
+  const before = t.session.state;
+  const betRecord = opts.betting
+    ? gradeBet(opts.betting, preBetObservation(before, before.seats[t.session.humanSeatId].bankroll), opts.rounding, bet, before.roundNumber + 1)
+    : null;
   const session = dealRound(t.session, bet, rng);
   let tracker = t.tracker;
   if (session.state.shoeNumber !== tracker.shoeNumber)
     tracker = createTracker(session.state.shoeNumber, session.config.rules, opts.mode, at, deviationSetInfo(session.config.rules, opts));
   tracker = noteMode(tracker, opts.mode);
-  return afterTransition({ ...t, session, tracker, completedReport: null, lastDecision: null, lastInsurance: null, lastCheckpoint: null }, opts, rng, at);
+  if (betRecord) tracker = recordBet(tracker, betRecord);
+  return afterTransition({ ...t, session, tracker, completedReport: null, lastDecision: null, lastInsurance: null, lastBet: betRecord, lastCheckpoint: null }, opts, rng, at);
 }
 
 export function trainingAct(t: TrainingTable, action: PlayerAction, opts: TrainingOptions, rng: Rng, at: number): TrainingTable {

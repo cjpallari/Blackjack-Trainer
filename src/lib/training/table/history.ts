@@ -80,6 +80,9 @@ export interface HistoryAggregate {
   readonly deviationMissed: number;
   readonly wrongDeviations: number;
   readonly byCell: readonly CellDeviationStats[];
+  /** Betting-training wagers and how many matched the ramp. */
+  readonly betDecisions: number;
+  readonly betCorrect: number;
 }
 
 /** Totals across shoes. Counting metrics use only valid (uninterrupted) shoes. */
@@ -102,6 +105,8 @@ export function aggregateHistory(reports: readonly ShoeReport[]): HistoryAggrega
     decisionsCorrect: sum(reports, (r) => r.strategy.correct),
     estimatedEvLost: sum(reports, (r) => r.strategy.estimatedEvLost),
     ...deviationTotals(reports),
+    betDecisions: sum(reports, (r) => r.betting?.decisions ?? 0),
+    betCorrect: sum(reports, (r) => r.betting?.correct ?? 0),
   };
 }
 
